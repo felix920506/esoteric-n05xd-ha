@@ -1,0 +1,306 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Esoteric unit",
+        "description": "Connect to an Esoteric unit through its RS-232C port.",
+        "data": {
+          "name": "Name",
+          "connection": "Connection",
+          "model": "Model",
+          "baudrate": "Baud rate"
+        },
+        "data_description": {
+          "name": "Optional. Defaults to the model name.",
+          "connection": "`socket://host:port` for a raw TCP serial server (set 9600 8N1 on the server), `rfc2217://host:port` if the server lets clients set the baud rate (RFC 2217), or a local port such as `/dev/ttyUSB0` / `COM3`.",
+          "model": "Models other than the N-05XD have not been tested on real hardware.",
+          "baudrate": "Esoteric units use 9600. Only sent for rfc2217:// and local serial ports; for socket:// configure it on the serial server."
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Esoteric unit",
+        "data": {
+          "connection": "Connection",
+          "model": "Model",
+          "baudrate": "Baud rate"
+        },
+        "data_description": {
+          "connection": "`socket://host:port` for a raw TCP serial server (set 9600 8N1 on the server), `rfc2217://host:port` if the server lets clients set the baud rate (RFC 2217), or a local port such as `/dev/ttyUSB0` / `COM3`.",
+          "model": "Models other than the N-05XD have not been tested on real hardware.",
+          "baudrate": "Esoteric units use 9600. Only sent for rfc2217:// and local serial ports; for socket:// configure it on the serial server."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not open the connection.",
+      "invalid_connection": "Not a valid connection string.",
+      "invalid_baudrate": "Baud rate must be a positive whole number.",
+      "port_busy": "The serial server closed the connection immediately. It probably allows only one client per port and another client is connected; disconnect it or raise the server's connection limit."
+    },
+    "abort": {
+      "already_configured": "This connection is already configured.",
+      "reconfigure_successful": "Reconfiguration was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "scan_interval": "Polling interval",
+          "response_timeout": "Response timeout"
+        },
+        "data_description": {
+          "scan_interval": "How often to read the unit's status.",
+          "response_timeout": "How long to wait for ACK or a reply. The unit answers within 50 ms; raise this for slow serial servers."
+        }
+      }
+    }
+  },
+  "selector": {
+    "model": {
+      "options": {
+        "n_05xd": "N-05XD",
+        "k_01xd": "K-01XD",
+        "k_03xd": "K-03XD",
+        "k_05xd": "K-05XD",
+        "grandioso_c1x": "Grandioso C1X",
+        "grandioso_c1x_solo": "Grandioso C1X solo",
+        "grandioso_e1": "Grandioso E1",
+        "f_01": "F-01",
+        "f_02": "F-02",
+        "generic": "Other / generic"
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "key_cap_imp": {
+        "name": "Capacitance/impedance"
+      },
+      "key_cartridge_gain_down": {
+        "name": "Cartridge gain down"
+      },
+      "key_cartridge_gain_up": {
+        "name": "Cartridge gain up"
+      },
+      "key_clear": {
+        "name": "Clear"
+      },
+      "key_cursor_left": {
+        "name": "Cursor left"
+      },
+      "key_cursor_right": {
+        "name": "Cursor right"
+      },
+      "key_demag": {
+        "name": "Demagnetize"
+      },
+      "key_digit_0": {
+        "name": "Digit 0"
+      },
+      "key_digit_1": {
+        "name": "Digit 1"
+      },
+      "key_digit_2": {
+        "name": "Digit 2"
+      },
+      "key_digit_3": {
+        "name": "Digit 3"
+      },
+      "key_digit_4": {
+        "name": "Digit 4"
+      },
+      "key_digit_5": {
+        "name": "Digit 5"
+      },
+      "key_digit_6": {
+        "name": "Digit 6"
+      },
+      "key_digit_7": {
+        "name": "Digit 7"
+      },
+      "key_digit_8": {
+        "name": "Digit 8"
+      },
+      "key_digit_9": {
+        "name": "Digit 9"
+      },
+      "key_dimmer": {
+        "name": "Dimmer"
+      },
+      "key_display": {
+        "name": "Display"
+      },
+      "key_eq_next": {
+        "name": "Next EQ curve"
+      },
+      "key_eq_previous": {
+        "name": "Previous EQ curve"
+      },
+      "key_fast_forward": {
+        "name": "Fast forward"
+      },
+      "key_gain_down": {
+        "name": "Gain down"
+      },
+      "key_gain_up": {
+        "name": "Gain up"
+      },
+      "key_input_esla": {
+        "name": "Input ES-LINK Analog"
+      },
+      "key_input_next": {
+        "name": "Next input"
+      },
+      "key_input_option": {
+        "name": "Input option slot"
+      },
+      "key_input_phono": {
+        "name": "Input phono"
+      },
+      "key_input_previous": {
+        "name": "Previous input"
+      },
+      "key_input_rca": {
+        "name": "Input RCA"
+      },
+      "key_input_xlr": {
+        "name": "Input XLR"
+      },
+      "key_led_off": {
+        "name": "LED off"
+      },
+      "key_load_preset": {
+        "name": "Load preset"
+      },
+      "key_low_limit": {
+        "name": "Low limit"
+      },
+      "key_menu": {
+        "name": "Menu"
+      },
+      "key_mm_mc": {
+        "name": "MM/MC"
+      },
+      "key_mode": {
+        "name": "Mode"
+      },
+      "key_mono": {
+        "name": "Mono"
+      },
+      "key_mute": {
+        "name": "Mute toggle"
+      },
+      "key_output": {
+        "name": "Output"
+      },
+      "key_output_gain": {
+        "name": "Output gain"
+      },
+      "key_output_opt": {
+        "name": "Output optional"
+      },
+      "key_output_rca": {
+        "name": "Output RCA"
+      },
+      "key_output_xlr": {
+        "name": "Output XLR"
+      },
+      "key_play_area": {
+        "name": "Play area"
+      },
+      "key_play_mode": {
+        "name": "Play mode"
+      },
+      "key_plus_10": {
+        "name": "+10"
+      },
+      "key_rewind": {
+        "name": "Rewind"
+      },
+      "key_roll_off": {
+        "name": "Roll-off"
+      },
+      "key_setup_menu": {
+        "name": "Setup menu"
+      },
+      "key_subsonic": {
+        "name": "Subsonic filter"
+      },
+      "key_tray": {
+        "name": "Tray open/close"
+      },
+      "key_turnover": {
+        "name": "Turnover"
+      }
+    },
+    "sensor": {
+      "input": {
+        "name": "Input"
+      },
+      "analog_output": {
+        "name": "Analog output"
+      },
+      "digital_output": {
+        "name": "Digital output"
+      },
+      "media": {
+        "name": "Media"
+      },
+      "playback_status": {
+        "name": "Playback status"
+      },
+      "play_mode": {
+        "name": "Play mode"
+      },
+      "repeat": {
+        "name": "Repeat"
+      },
+      "upconversion": {
+        "name": "Upconversion"
+      },
+      "sample_rate": {
+        "name": "Sample rate"
+      },
+      "codec": {
+        "name": "Codec"
+      },
+      "mqa": {
+        "name": "MQA"
+      },
+      "phono_output": {
+        "name": "Output"
+      },
+      "eq_curve": {
+        "name": "EQ curve"
+      },
+      "gain": {
+        "name": "Gain"
+      },
+      "cartridge_gain": {
+        "name": "Cartridge gain"
+      }
+    },
+    "number": {
+      "volume": {
+        "name": "Volume"
+      }
+    }
+  },
+  "services": {
+    "send_command": {
+      "name": "Send command",
+      "description": "Send a raw RS-232C command. Requests (starting with ?) return the unit's reply.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Device",
+          "description": "The Esoteric unit."
+        },
+        "command": {
+          "name": "Command",
+          "description": "Command without @ and CR, e.g. `KEY 5A`, `VOLUME 30.0` or `?INPUT`."
+        }
+      }
+    }
+  }
+}

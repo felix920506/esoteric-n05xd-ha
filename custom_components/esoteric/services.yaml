@@ -1,0 +1,12 @@
+send_command:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: esoteric
+    command:
+      required: true
+      example: "KEY 5A"
+      selector:
+        text:
