@@ -196,6 +196,9 @@ async def test_setup_and_state(hass: HomeAssistant, device: FakeEsoteric) -> Non
     assert hass.states.get("number.esoteric_n_05xd_volume").state == "30.0"
     # N-05XD is a network player: no CD-only entities.
     assert hass.states.get("sensor.esoteric_n_05xd_media") is None
+    # Confirmed on site: no digital output, no upconversion (DOC-MISMATCH-01/02).
+    assert hass.states.get("sensor.esoteric_n_05xd_digital_output") is None
+    assert hass.states.get("sensor.esoteric_n_05xd_upconversion") is None
     assert hass.states.get("button.esoteric_n_05xd_dimmer") is not None
     assert hass.states.get("button.esoteric_n_05xd_tray") is None
 
@@ -313,33 +316,103 @@ async def test_select_source_direct(hass: HomeAssistant, device: FakeEsoteric) -
 
 
 async def test_power_and_standby(hass: HomeAssistant, device: FakeEsoteric) -> None:
+    """N-05XD: standby reports "@INPUT OFF"; POWER ON replies 0x83, not ACK."""
+    device.values["PMODE"] = "SHUFFLE"
     entry = await _setup(hass, device)
+    coordinator = entry.runtime_data
     await _mp(hass, "turn_off")
     assert device.power is False
     assert hass.states.get(MP).state == STATE_OFF
 
-    # Standby is detected by polling (unit NAKs everything).
-    device.power = True
-    await entry.runtime_data.async_refresh()
-    assert hass.states.get(MP).state == STATE_PLAYING
-    device.power = False
-    await entry.runtime_data.async_refresh()
+    await coordinator.async_refresh()
     assert hass.states.get(MP).state == STATE_OFF
     assert hass.states.get("sensor.esoteric_n_05xd_codec").state == STATE_UNAVAILABLE
-    # In standby we probe a few requests, not the whole list.
+    # Standby defaults (PMODE CONTINUE) don't overwrite the real values.
+    assert coordinator.data.value("PMODE") == "SHUFFLE"
     device.received.clear()
-    await entry.runtime_data.async_refresh()
-    assert len(device.received) == 3
+    await coordinator.async_refresh()
+    assert device.received == ["@?INPUT"]
 
-    # Silent in standby works too (timeouts instead of NAK).
-    device.standby_naks = False
-    await entry.runtime_data.async_refresh()
+    # Someone presses the power button: noticed by polling.
+    device.power = True
+    await coordinator.async_refresh()
+    assert hass.states.get(MP).state == STATE_PLAYING
+    device.power = False
+    await coordinator.async_refresh()
     assert hass.states.get(MP).state == STATE_OFF
 
-    await _mp(hass, "turn_on")
+    # DOC-MISMATCH-06: no ACK for POWER ON, but it is not an error.
+    with patch("custom_components.esoteric.coordinator.POWER_SETTLE", 0.01):
+        await _mp(hass, "turn_on")
     assert device.power is True
-    await entry.runtime_data.async_refresh()
     assert hass.states.get(MP).state == STATE_PLAYING
+
+
+async def test_power_on_right_after_off_is_retried(
+    hass: HomeAssistant, device: FakeEsoteric
+) -> None:
+    """DOC-MISMATCH-08: POWER ON during shutdown is ACKed but ignored."""
+    device.power_on_lockout = 0.3
+    await _setup(hass, device)
+    with patch("custom_components.esoteric.coordinator.POWER_SETTLE", 0.1):
+        await _mp(hass, "turn_off")
+        await _mp(hass, "turn_on")
+    assert device.power is True
+    assert device.received.count("@POWER ON") > 1
+    assert hass.states.get(MP).state == STATE_PLAYING
+    assert hass.states.get(MP).attributes[ATTR_INPUT_SOURCE] == "NET"
+
+
+async def test_power_on_gives_up(hass: HomeAssistant, device: FakeEsoteric) -> None:
+    device.power_on_lockout = 60
+    await _setup(hass, device)
+    with (
+        patch("custom_components.esoteric.coordinator.POWER_SETTLE", 0.05),
+        patch("custom_components.esoteric.coordinator.POWER_ON_RETRY_WINDOW", 0.3),
+    ):
+        await _mp(hass, "turn_off")
+        with pytest.raises(HomeAssistantError, match="stayed in standby"):
+            await _mp(hass, "turn_on")
+    assert hass.states.get(MP).state == STATE_OFF
+
+
+@pytest.mark.parametrize("mode", ["nak", "silent"])
+async def test_standby_without_input_off(hass: HomeAssistant, mode: str) -> None:
+    """Units that NAK or ignore requests in standby are also seen as off."""
+    device = FakeEsoteric()
+    device.standby_mode = mode
+    device.power_on_reply = b"\x06"
+    await device.start()
+    try:
+        entry = await _setup(hass, device, model="k_05xd")
+        device.power = False
+        await entry.runtime_data.async_refresh()
+        assert hass.states.get(MP).state == STATE_OFF
+        # Only a few requests are probed in standby, not the whole list.
+        device.received.clear()
+        await entry.runtime_data.async_refresh()
+        assert len(device.received) == 3
+        await _mp(hass, "turn_on")
+        await entry.runtime_data.async_refresh()
+        assert hass.states.get(MP).state == STATE_PLAYING
+    finally:
+        await device.stop()
+
+
+async def test_power_on_failure_is_reported(
+    hass: HomeAssistant, device: FakeEsoteric
+) -> None:
+    """No ACK and the unit still reads as off: that is an error."""
+    entry = await _setup(hass, device)
+    await _mp(hass, "turn_off")
+    device.power_on_reply = b""
+    with (
+        patch.object(device, "_on_line", lambda line, writer: None),
+        patch("custom_components.esoteric.coordinator.POWER_SETTLE", 0.01),
+        pytest.raises(HomeAssistantError),
+    ):
+        await _mp(hass, "turn_on")
+    assert entry.runtime_data.data.power is False
 
 
 async def test_unsupported_request_is_dropped(

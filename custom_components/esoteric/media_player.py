@@ -15,7 +15,7 @@ from homeassistant.components.media_player import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .coordinator import EsotericConfigEntry, EsotericCoordinator
+from .coordinator import STANDBY_INPUT, EsotericConfigEntry, EsotericCoordinator
 from .entity import EsotericEntity
 from .models import REQ_INPUT, REQ_PMODE, REQ_PSTS, REQ_REPEAT, Category
 
@@ -129,7 +129,8 @@ class EsotericMediaPlayer(EsotericEntity, MediaPlayerEntity):
     @property
     def source(self) -> str | None:
         """Current input."""
-        return self._state.value(REQ_INPUT)
+        source = self._state.value(REQ_INPUT)
+        return None if source == STANDBY_INPUT else source
 
     @property
     def source_list(self) -> list[str] | None:

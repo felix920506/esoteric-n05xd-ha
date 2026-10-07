@@ -8,12 +8,26 @@ from __future__ import annotations
 
 import asyncio
 import struct
+import time
 
 ACK = b"\x06"
 NAK = b"\x15"
 
 IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240
 COM_PORT = 44
+
+
+# What a real N-05XD reports in standby.
+STANDBY_VALUES = {
+    "INPUT": "OFF",
+    "AOUT": "OFF",
+    "PSTS": "STOP 0 0 00 TE",
+    "PMODE": "CONTINUE",
+    "REPEAT": "OFF",
+    "FS": "NON",
+    "CODEC": "",
+    "MQA": "NON",
+}
 
 
 class FakeEsoteric:
@@ -38,8 +52,17 @@ class FakeEsoteric:
         self.toggle_keys = toggle_keys
         self.single_client = single_client
         self.power = True
-        # When True the unit NAKs all requests in standby, else stays silent.
-        self.standby_naks = True
+        # Standby behavior. "report": answer with defaults and "@INPUT OFF"
+        # and accept commands, as a real N-05XD does. "nak": NAK everything.
+        # "silent": answer nothing.
+        self.standby_mode = "report"
+        # A real N-05XD answers POWER ON with 0x83 instead of ACK
+        # (DOC-MISMATCH-06).
+        self.power_on_reply = b"\x83"
+        # A real N-05XD ACKs but ignores POWER ON for ~6-8 s after POWER OFF
+        # (DOC-MISMATCH-08).
+        self.power_on_lockout = 0.0
+        self._off_at = 0.0
         self.inputs = [
             "NET",
             "Bluetooth",
@@ -179,19 +202,29 @@ class FakeEsoteric:
         body = line[1:]
         if body.startswith("?"):
             key = body[1:]
-            if not self.power:
-                if self.standby_naks:
+            if not self.power and self.standby_mode != "report":
+                if self.standby_mode == "nak":
                     self.send(NAK, writer)
                 return
-            if key in self.values and key not in self.unsupported:
+            if not self.power and key in STANDBY_VALUES:
+                self.send(f"@{key} {STANDBY_VALUES[key]}\r".encode(), writer)
+            elif key in self.values and key not in self.unsupported:
                 self.send(f"@{key} {self.values[key]}\r".encode(), writer)
             else:
                 self.send(NAK, writer)
             return
         command, _, arg = body.partition(" ")
         if command == "POWER" and arg in ("ON", "OFF"):
+            if arg == "OFF":
+                self._off_at = time.monotonic()
+            elif time.monotonic() - self._off_at < self.power_on_lockout:
+                self.send(ACK, writer)
+                return
             self.power = arg == "ON"
-        elif not self.power:
+            if self.power:
+                self.send(self.power_on_reply, writer)
+                return
+        elif not self.power and self.standby_mode != "report":
             self.send(NAK, writer)
             return
         elif command == "VOLUME":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -39,6 +40,12 @@ UNSUPPORTED_RECHECK = 30
 STANDBY_PROBES = 3
 # Time for the unit to act on a key before we read the result back.
 KEY_SETTLE = 0.4
+# A real N-05XD keeps answering in standby, reporting "@INPUT OFF".
+STANDBY_INPUT = "OFF"
+# Time to let the unit report its new power state before reading it back.
+POWER_SETTLE = 1.0
+# How long to keep re-sending POWER ON while the unit is still shutting down.
+POWER_ON_RETRY_WINDOW = 15.0
 STORAGE_VERSION = 1
 
 type EsotericConfigEntry = ConfigEntry[EsotericCoordinator]
@@ -128,7 +135,11 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         state.unsupported.discard(message.key)
         self._strikes.pop(message.key, None)
         if message.key == REQ_INPUT and message.value:
-            self._learn_input(message.value)
+            if message.value == STANDBY_INPUT:
+                state.power = False
+            else:
+                state.power = True
+                self._learn_input(message.value)
         self.async_update_listeners()
 
     @callback
@@ -161,7 +172,7 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         failures = 0
         for key in pending:
             try:
-                await self.client.request(key)
+                message = await self.client.request(key)
             except CommandRejectedError:
                 rejected.append(key)
                 failures += 1
@@ -171,11 +182,16 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
                 raise UpdateFailed(str(err)) from err
             else:
                 answered = True
+                if key == REQ_INPUT and message.value == STANDBY_INPUT:
+                    # In standby the unit answers with defaults (e.g. PMODE
+                    # CONTINUE); don't overwrite the real values with them.
+                    return state
             if not answered and failures >= STANDBY_PROBES:
                 break
 
         if answered:
-            state.power = True
+            if state.value(REQ_INPUT) != STANDBY_INPUT:
+                state.power = True
             for key in rejected:
                 self._strikes[key] = self._strikes.get(key, 0) + 1
                 if self._strikes[key] >= UNSUPPORTED_STRIKES:
@@ -186,8 +202,9 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
                     )
                     state.unsupported.add(key)
         else:
-            # No power query exists; a unit that answers nothing is assumed
-            # to be in standby (to be confirmed on real hardware).
+            # No power query exists. Units that report "@INPUT OFF" are
+            # handled above; one that answers nothing is assumed to be in
+            # standby (behavior of models other than the N-05XD unknown).
             state.power = False
         return state
 
@@ -197,16 +214,19 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         """Send a normal command, translating errors for the UI."""
         try:
             await self.client.send_command(command)
-        except CommandRejectedError as err:
-            raise HomeAssistantError(
+        except EsotericError as err:
+            raise self._command_error(command, err) from err
+
+    def _command_error(self, command: str, err: EsotericError) -> HomeAssistantError:
+        if isinstance(err, CommandRejectedError):
+            return HomeAssistantError(
                 f"{self.model.name} rejected command {command!r} (NAK). It may "
                 "not be available in the unit's current state (e.g. source) "
                 "or may be disabled in its menu settings"
-            ) from err
-        except EsotericError as err:
-            raise HomeAssistantError(
-                f"Sending {command!r} to {self.model.name} failed: {err}"
-            ) from err
+            )
+        return HomeAssistantError(
+            f"Sending {command!r} to {self.model.name} failed: {err}"
+        )
 
     async def async_press(self, code: str) -> None:
         """Press a remote-control key."""
@@ -222,9 +242,52 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
 
     async def async_set_power(self, on: bool) -> None:
         """Power on / standby."""
-        await self.async_send("POWER ON" if on else "POWER OFF")
+        command = "POWER ON" if on else "POWER OFF"
+        acked = await self._send_power(command)
+        if on:
+            await self._confirm_power_on(command, acked)
+        elif acked is not True:
+            raise self._command_error(command, acked)
         self.data.power = on
         self.async_update_listeners()
+
+    async def _send_power(self, command: str) -> ResponseTimeoutError | bool:
+        """Send POWER ON/OFF; return True on ACK or the timeout error."""
+        try:
+            await self.client.send_command(command)
+        except ResponseTimeoutError as err:
+            # DOC-MISMATCH-06: a real N-05XD answers a POWER ON that it acts
+            # on with 0x83 instead of ACK (0x06).
+            return err
+        except EsotericError as err:
+            raise self._command_error(command, err) from err
+        return True
+
+    async def _confirm_power_on(
+        self, command: str, acked: ResponseTimeoutError | bool
+    ) -> None:
+        """Make sure the unit really left standby, re-sending if needed.
+
+        DOC-MISMATCH-08: a real N-05XD ACKs but ignores POWER ON for about
+        6-8 s after POWER OFF. Units that report "@INPUT OFF" in standby
+        tell us whether it worked; for others we can only trust the ACK.
+        """
+        deadline = time.monotonic() + POWER_ON_RETRY_WINDOW
+        while True:
+            await asyncio.sleep(POWER_SETTLE)
+            message = await self.async_refresh_key(REQ_INPUT)
+            if message is None or message.value != STANDBY_INPUT:
+                if message is None and acked is not True:
+                    raise self._command_error(command, acked)
+                return
+            if time.monotonic() > deadline:
+                raise HomeAssistantError(
+                    f"{self.model.name} stayed in standby after {command!r}"
+                )
+            _LOGGER.debug(
+                "%s still in standby, re-sending %s", self.model.name, command
+            )
+            await self._send_power(command)
 
     async def async_set_volume(self, steps: float) -> None:
         """Set the volume in device steps."""
