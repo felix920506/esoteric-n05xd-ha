@@ -145,15 +145,15 @@ KEYS_BY_CATEGORY: dict[Category, tuple[KeyCommand, ...]] = {
 # Request commands (1-5-2). Each is sent as "@?<KEY>" and answered "@<KEY> ...".
 REQ_INPUT = "INPUT"
 REQ_AOUT = "AOUT"
-REQ_DOUT = "DOUT"  # DOC-MISMATCH-01 on N-05XD
+REQ_DOUT = "DOUT"  # not on N-05XD (DOC-MISMATCH-01, resolved)
 REQ_MEDIA = "MEDIA"
-REQ_PSTS = "PSTS"
+REQ_PSTS = "PSTS"  # DOC-MISMATCH-07 on N-05XD (AirPlay)
 REQ_PMODE = "PMODE"
 REQ_REPEAT = "REPEAT"
-REQ_UPCONV = "UPCONV"  # DOC-MISMATCH-02 on N-05XD
-REQ_FS = "FS"  # DOC-MISMATCH-05 on N-05XD
+REQ_UPCONV = "UPCONV"  # not on N-05XD (DOC-MISMATCH-02, resolved)
+REQ_FS = "FS"  # "NON" while idle (DOC-MISMATCH-05, resolved)
 REQ_MQA = "MQA"
-REQ_CODEC = "CODEC"  # DOC-MISMATCH-05 on N-05XD
+REQ_CODEC = "CODEC"  # empty while idle (DOC-MISMATCH-05, resolved)
 REQ_VOLUME = "VOLUME"
 REQ_OUTPUT = "OUTPUT"
 REQ_EQ = "EQ"
@@ -251,21 +251,44 @@ _C, _CD, _N, _A, _P = (
 )
 
 C1X_INPUTS = ("XLR1", "XLR2", "XLR3", "ESLA1", "ESLA2", "ESLA3", "RCA1", "RCA2")
-# Differences between the command table (rev 1.5) and a real N-05XD, seen
-# remotely on 2026-10-05 while the unit was STOPPED on input NET. The unit's
-# menu settings were unknown and these may be state dependent, so the code keeps
-# the documented behavior. Grep for the tag; confirm each one on site.
+# Differences between the command table (rev 1.5) and a real N-05XD.
+# 2026-10-05: remote, unit stopped on NET. 2026-10-07: on site, webcam on the
+# front panel, including AirPlay playback. The unit's menu settings may be
+# setup specific and some behavior is source/state dependent, so the code
+# keeps the documented behavior unless noted. Grep for the tag.
 #
-#   DOC-MISMATCH-01  @?DOUT   (common request)     -> NAK
-#   DOC-MISMATCH-02  @?UPCONV (network request)    -> NAK
-#   DOC-MISMATCH-03  @KEY 29  (network REPEAT)     -> NAK
-#   DOC-MISMATCH-04  @KEY 2A  (network SHUFFLE)    -> NAK
-#   DOC-MISMATCH-05  @?CODEC  -> "@CODEC" with no value;
-#                    @?FS     -> "@FS NON" (not a sampling frequency)
+#   DOC-MISMATCH-01  RESOLVED: @?DOUT (common request) -> NAK idle and
+#                    playing; the N-05XD has no digital output. Not polled.
+#   DOC-MISMATCH-02  RESOLVED: @?UPCONV (network request) -> NAK idle and
+#                    playing; no upconversion setting in the N-05XD's menu.
+#                    Not polled.
+#   DOC-MISMATCH-03  @KEY 29  (network REPEAT)   -> NAK idle on NET and on
+#                    AirPlay (expected there); untested on a source that
+#                    supports repeat.
+#   DOC-MISMATCH-04  @KEY 2A  (network SHUFFLE)  -> as -03.
+#   DOC-MISMATCH-05  RESOLVED: "@CODEC" with no value and "@FS NON" only while
+#                    nothing plays; AirPlay gave "@CODEC AAC", "@FS 44.1kHz".
+#   DOC-MISMATCH-06  @POWER ON -> 0x83 instead of ACK (0x06) every time it
+#                    actually powers on. Handled: readback decides.
+#   DOC-MISMATCH-07  @?PSTS stays "PLAY 0 0 00 TE" while AirPlay is paused
+#                    (the display icon too); no track/time for AirPlay.
+#   DOC-MISMATCH-08  @POWER ON within ~6-8 s of POWER OFF is ACKed (0x06) but
+#                    ignored; the unit stays in standby. Once it acts on POWER
+#                    ON it replies 0x83 (see -06). Handled: re-sent until
+#                    INPUT is no longer OFF.
 #
-# Matches the table but worth noting: direct "@INPUT <name>" is NAKed (the
-# table documents it only for C1X / C1X solo / E1), as are the CD-group
-# REPEAT/SHUFFLE codes KEY 47 / KEY 1F.
+# Not in the table, observed on the N-05XD:
+#   * Standby: every request is still answered, "@INPUT OFF", "@AOUT OFF" and
+#     defaults (PMODE CONTINUE, REPEAT OFF); commands are ACKed. "INPUT OFF"
+#     is used as the power state.
+#   * POWER OFF: ACK in ~30 ms. POWER ON: about 30 s of "Initialize" before
+#     the unit is ready, although it answers requests at once.
+#   * MENU (KEY 21) steps through setup items rather than toggling the menu;
+#     < / > (KEY 22/23) change the shown setting immediately. Menu closes on
+#     its own after a few seconds.
+#   * Dimmer (KEY 5A) cycles brightness levels, shown as "DIMMER n".
+#   * Direct "@INPUT <name>" is NAKed (the table documents it only for C1X /
+#     C1X solo / E1), as are the CD-group REPEAT/SHUFFLE codes KEY 47 / 1F.
 
 # Read from a real N-05XD by pressing INPUT+ (KEY 20).
 N05XD_INPUTS = (
@@ -289,9 +312,13 @@ MODELS: dict[str, ModelInfo] = {
             "n_05xd",
             "N-05XD",
             frozenset({_C, _N}),
-            # Implemented as documented. Where the real unit disagreed, see
-            # the DOC-MISMATCH-xx notes above; confirm on site before changing.
-            _requests(COMMON_REQUESTS, NETWORK_REQUESTS),
+            # As documented, except where a DOC-MISMATCH-xx above was
+            # confirmed on site: no DOUT (-01) or UPCONV (-02).
+            tuple(
+                req
+                for req in _requests(COMMON_REQUESTS, NETWORK_REQUESTS)
+                if req not in (REQ_DOUT, REQ_UPCONV)
+            ),
             volume=Volume(maximum=100.0, step=0.5, use_keys=False),
             known_inputs=N05XD_INPUTS,
             tested=True,
