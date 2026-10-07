@@ -9,10 +9,11 @@ It is built from the official *Esoteric RS-232C command table, Rev 1.5 (2024/9/3
 > [!WARNING]
 > **Hardware testing status**
 >
-> - **N-05XD**: the only model the maintainer owns. Status requests, volume, STOP and
->   input stepping are confirmed on a real unit (see
->   [N-05XD hardware results](#n-05xd-hardware-results)). Power on/off and playback
->   keys other than STOP haven't been sent to a real unit yet.
+> - **N-05XD**: the only model the maintainer owns. It has been tested on a real unit,
+>   including power, standby, volume, playback, input, dimmer and menu keys (see
+>   [N-05XD hardware results](#n-05xd-hardware-results)). A few commands behave
+>   differently from the command table; those are tagged `DOC-MISMATCH-xx` until
+>   confirmed.
 > - **All other models** (Grandioso C1X / C1X solo / E1, K-01XD / K-03XD / K-05XD,
 >   F-01 / F-02): written from the command table alone and **never tested on real
 >   hardware**. They may not work, or only partly. Bug reports with
@@ -139,50 +140,61 @@ Each unit gets these entities:
 
 ## N-05XD hardware results
 
-These were tested remotely on a real N-05XD through an STE 8-port serial server
-(`socket://`, 9600 8N1 set on the server). Nobody could see the unit. It was
-stopped on the NET input, and its menu settings were unknown. Replies took
-60–90 ms over the network.
+Tested on a real N-05XD through an STE 8-port serial server (`socket://`, 9600 8N1
+set on the server). The first round, on 2026-10-05, was remote with the unit
+stopped on NET. The second, on 2026-10-07, was on site with a camera on the front
+panel and included AirPlay playback. Replies took 30–150 ms over the network.
 
 ### Matches the command table
 
 | Command | Result |
 |---------|--------|
-| `?INPUT` `?AOUT` `?PSTS` `?PMODE` `?REPEAT` `?MQA` `?VOLUME` | Answered. |
+| `?INPUT` `?AOUT` `?PSTS` `?PMODE` `?REPEAT` `?FS` `?CODEC` `?MQA` `?VOLUME` | Answered. During AirPlay: `@FS 44.1kHz`, `@CODEC AAC`. |
 | `?MEDIA` `?OUTPUT` `?EQ` `?GAIN` `?CGAIN` | NAK. These are documented only for CD players and phono EQs. |
-| `VOLUME 55.0` / `VOLUME 55.5` | ACK, and the unit reads back the new value. |
-| `KEY 28` (STOP) | ACK. When already stopped, the reported track resets to 0. |
+| `?DOUT` `?UPCONV` | NAK. Listed for this model's command groups, but the N-05XD has no digital output and no upconversion setting (`DOC-MISMATCH-01`, `-02`). |
+| `POWER OFF` | ACK in about 30 ms. |
+| `VOLUME 54.0` | ACK. The display shows "Volume 54.0", and the readback matches. |
+| `KEY 26` / `27` / `28` / `24` / `25` (play, pause, stop, previous, next) | ACK. Confirmed audibly on AirPlay. |
 | `KEY 20` (INPUT+) | ACK. Steps through NET, Bluetooth, LINE1, LINE2, XLR, COAX1, COAX2, OPT1, OPT2, USB. |
+| `KEY 5A` (Dimmer) | ACK. Cycles display brightness, shown as "DIMMER n". |
+| `KEY 21` (Menu), `KEY 22` / `23` (< >) | ACK. See the notes below. |
 | `INPUT <name>` (direct select) | NAK. Direct select is documented only for C1X, C1X solo and E1, so the N-05XD changes source by stepping INPUT+. |
 
-### Differences from the command table (to confirm on site)
+### Not covered by the command table
 
-The unit didn't match the command table in the cases below. These may depend on
-the source, the playback state or menu settings (for example, repeat and shuffle
-make no sense on AirPlay), so **the integration keeps the documented behavior**.
-Each one is tagged in the code with its `DOC-MISMATCH-xx` code (`grep -rn
-DOC-MISMATCH`), so the code can be updated once it's confirmed on the unit.
+- **Standby.** The unit still answers every request. It reports `@INPUT OFF` and
+  `@AOUT OFF`, and default values for the rest (`PMODE CONTINUE`, `REPEAT OFF`).
+  Commands are still ACKed. The integration treats `INPUT OFF` as standby. For
+  other models it still assumes standby when the unit NAKs or ignores requests.
+- **Power-on time.** After `POWER ON`, the display shows "Initialize" for about
+  30 s. Requests are answered straight away.
+- **Menu keys.** MENU (`KEY 21`) steps through setup items (`CLK`, `VOLDP`, …)
+  instead of opening and closing the menu. **< and > change the shown setting
+  immediately.** The menu closes on its own after a few seconds. The menu and
+  cursor buttons are disabled by default in Home Assistant for this reason.
+- **Volume display.** The menu setting `VOLDP> STEP` matches the volume being
+  reported in steps.
 
-| Code | Command | Command table says | N-05XD did (stopped, NET) | Integration behavior now |
-|------|---------|--------------------|---------------------------|--------------------------|
-| `DOC-MISMATCH-01` | `?DOUT` | Common request (digital output) | NAK | Polled as documented. After 3 NAKs in a row the sensor shows unavailable, and the request is retried every 30 polls. |
-| `DOC-MISMATCH-02` | `?UPCONV` | Network/DAC request | NAK | Same as above. |
-| `DOC-MISMATCH-03` | `KEY 29` (REPEAT) | Network/DAC key | NAK | Repeat can be set from the media player. A NAK shows as an error. |
-| `DOC-MISMATCH-04` | `KEY 2A` (SHUFFLE) | Network/DAC key | NAK | Shuffle can be set from the media player. A NAK shows as an error. |
-| `DOC-MISMATCH-05` | `?CODEC`, `?FS` | Answer carries a codec / sampling frequency | `@CODEC` with no value, `@FS NON` | An empty value shows as unknown, and `NON` is shown as-is. |
+### Differences from the command table
+
+These may depend on the source, the playback state or menu settings (for
+example, repeat and shuffle make no sense on AirPlay). So **the integration keeps
+the documented behavior** unless the table below says otherwise. Each one is
+tagged in the code with its `DOC-MISMATCH-xx` code (`grep -rn DOC-MISMATCH`).
+
+| Code | Command | Command table says | N-05XD did | Integration behavior now | Status |
+|------|---------|--------------------|------------|--------------------------|--------|
+| `DOC-MISMATCH-01` | `?DOUT` | Common request (digital output) | NAK, both idle and during AirPlay | Not polled on the N-05XD, and no sensor. | **Resolved.** The N-05XD has no digital output. |
+| `DOC-MISMATCH-02` | `?UPCONV` | Network/DAC request | NAK, both idle and during AirPlay | Not polled on the N-05XD, and no sensor. | **Resolved.** The N-05XD's menu has no upconversion setting. |
+| `DOC-MISMATCH-03` | `KEY 29` (REPEAT) | Network/DAC key | NAK, both idle and during AirPlay | Repeat can be set from the media player. A NAK shows as an error. | Open. Test on a source that supports repeat. |
+| `DOC-MISMATCH-04` | `KEY 2A` (SHUFFLE) | Network/DAC key | NAK, both idle and during AirPlay | Same as above. | Open, as above. |
+| `DOC-MISMATCH-05` | `?CODEC`, `?FS` | Reply carries a codec / sampling frequency | `@CODEC` with no value and `@FS NON`, but only while idle | An empty value shows as unknown. | **Resolved.** Normal values while playing. |
+| `DOC-MISMATCH-06` | `POWER ON` | ACK (`0x06`) | Replies `0x83` instead whenever it actually powers on. | If no ACK arrives, the integration reads INPUT back and treats the command as successful when the unit reports itself on. | Handled |
+| `DOC-MISMATCH-07` | `?PSTS` | Play status | Stays `PLAY 0 0 00 TE` while AirPlay is paused (so does the display), with no track number or time | Shown as reported. | Open. Expected to be AirPlay-specific. |
+| `DOC-MISMATCH-08` | `POWER ON` | ACK means the command was received | Within about 6–8 s of `POWER OFF`, it's ACKed but ignored, and the unit stays in standby | After POWER ON, the integration reads INPUT back and re-sends POWER ON for up to 15 s while the unit still reports `OFF`. Measured on the unit: 8.8 s from turn-off to on. | Handled |
 
 The CD-group REPEAT/SHUFFLE codes (`KEY 47`, `KEY 1F`) were also NAKed. That's
 expected, since they aren't documented for the N-05XD.
-
-On site, try each `DOC-MISMATCH` item:
-1. While playing from a local source (USB or NET library), not AirPlay or
-   Bluetooth.
-2. With the RS-232C-related menu settings checked.
-
-`esoteric.send_command` (below) is the easiest way to do this.
-
-Not tested yet: POWER ON/OFF and how the unit behaves in standby, PLAY, PAUSE,
-next/previous, Dimmer, Menu and the cursor keys.
 
 ## Raw commands: `esoteric.send_command`
 
