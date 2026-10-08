@@ -101,7 +101,7 @@ can't control what other clients send.
 
 | Model | Command groups | Media player | Volume | Input select |
 |-------|----------------|--------------|--------|--------------|
-| N-05XD | Common, Network/DAC | power, play/pause/stop/next/prev, repeat, shuffle | 0–100.0 in 0.5 steps (`@VOLUME`) | by stepping INPUT+ through NET, Bluetooth, LINE1, LINE2, XLR, COAX1, COAX2, OPT1, OPT2, USB |
+| N-05XD | Common, Network/DAC | power, play/pause/stop/next/prev; repeat and shuffle shown read-only | 0–100.0 in 0.5 steps (`@VOLUME`) | by stepping INPUT+ through NET, Bluetooth, LINE1, LINE2, XLR, COAX1, COAX2, OPT1, OPT2, USB |
 | K-01XD / K-03XD / K-05XD | Common, CD | power, transport, repeat, shuffle | – | – |
 | Grandioso C1X / C1X solo | Common, AMP | power | 0–99.9 (KEY up/down, `@VOLUME`) | direct (XLR1-3, ESLA1-3, RCA1-2) |
 | Grandioso E1 | Common, Phono EQ | power | – | direct (XLR1-3, RCA, OPT) |
@@ -140,10 +140,12 @@ Each unit gets these entities:
 
 ## N-05XD hardware results
 
-Tested on a real N-05XD through an STE 8-port serial server (`socket://`, 9600 8N1
+Tested on a real N-05XD (output set to fixed level by the installer) through an
+STE 8-port serial server (`socket://`, 9600 8N1
 set on the server). The first round, on 2026-10-05, was remote with the unit
 stopped on NET. The second, on 2026-10-07, was on site with a camera on the front
-panel and included AirPlay playback. Replies took 30–150 ms over the network.
+panel and included AirPlay playback. The third, on 2026-10-08, played the unit's
+own OpenHome playlist from a test DLNA server. Replies took 30–150 ms over the network.
 
 ### Matches the command table
 
@@ -172,6 +174,12 @@ panel and included AirPlay playback. Replies took 30–150 ms over the network.
   instead of opening and closing the menu. **< and > change the shown setting
   immediately.** The menu closes on its own after a few seconds. The menu and
   cursor buttons are disabled by default in Home Assistant for this reason.
+- **Fixed-level outputs.** An installer can set an output to a fixed level, shown as
+  `XLR2-FIX` on the display, so that a downstream amplifier controls the volume.
+  `@VOLUME` is still ACKed, the display shows the new value, and `?VOLUME` reads
+  it back, but **the audio level doesn't change**. RS-232 can't detect this
+  (`?AOUT` reports just `XLR2`). On such installs, disable the Volume number
+  entity and ignore the media player's volume control.
 - **Volume display.** The menu setting `VOLDP> STEP` matches the volume being
   reported in steps.
 
@@ -186,11 +194,11 @@ tagged in the code with its `DOC-MISMATCH-xx` code (`grep -rn DOC-MISMATCH`).
 |------|---------|--------------------|------------|--------------------------|--------|
 | `DOC-MISMATCH-01` | `?DOUT` | Common request (digital output) | NAK, both idle and during AirPlay | Not polled on the N-05XD, and no sensor. | **Resolved.** The N-05XD has no digital output. |
 | `DOC-MISMATCH-02` | `?UPCONV` | Network/DAC request | NAK, both idle and during AirPlay | Not polled on the N-05XD, and no sensor. | **Resolved.** The N-05XD's menu has no upconversion setting. |
-| `DOC-MISMATCH-03` | `KEY 29` (REPEAT) | Network/DAC key | NAK, both idle and during AirPlay | Repeat can be set from the media player. A NAK shows as an error. | Open. Test on a source that supports repeat. |
-| `DOC-MISMATCH-04` | `KEY 2A` (SHUFFLE) | Network/DAC key | NAK, both idle and during AirPlay | Same as above. | Open, as above. |
+| `DOC-MISMATCH-03` | `KEY 29` (REPEAT) | Network/DAC key | NAK in every state tried: idle, AirPlay, and the unit's own playlist playing over DLNA with repeat on. The CD codes `KEY 47` / `1E` were also NAKed. | Repeat is shown on the N-05XD but can't be set. `?REPEAT` follows changes made by other controllers. | **Resolved.** Not supported over RS-232. |
+| `DOC-MISMATCH-04` | `KEY 2A` (SHUFFLE) | Network/DAC key | Same as above (`KEY 1F` also NAKed) | Shuffle is shown on the N-05XD but can't be set. `?PMODE` follows changes made elsewhere. | **Resolved.** Not supported over RS-232. |
 | `DOC-MISMATCH-05` | `?CODEC`, `?FS` | Reply carries a codec / sampling frequency | `@CODEC` with no value and `@FS NON`, but only while idle | An empty value shows as unknown. | **Resolved.** Normal values while playing. |
 | `DOC-MISMATCH-06` | `POWER ON` | ACK (`0x06`) | Replies `0x83` instead whenever it actually powers on. | If no ACK arrives, the integration reads INPUT back and treats the command as successful when the unit reports itself on. | Handled |
-| `DOC-MISMATCH-07` | `?PSTS` | Play status | Stays `PLAY 0 0 00 TE` while AirPlay is paused (so does the display), with no track number or time | Shown as reported. | Open. Expected to be AirPlay-specific. |
+| `DOC-MISMATCH-07` | `?PSTS` | Play status | Stays `PLAY 0 0 00 TE` while AirPlay is paused (so does the display), with no track number or time | Shown as reported. | **Confirmed AirPlay-only.** During DLNA playback, pause, track and time are reported correctly. |
 | `DOC-MISMATCH-08` | `POWER ON` | ACK means the command was received | Within about 6–8 s of `POWER OFF`, it's ACKed but ignored, and the unit stays in standby | After POWER ON, the integration reads INPUT back and re-sends POWER ON for up to 15 s while the unit still reports `OFF`. Measured on the unit: 8.8 s from turn-off to on. | Handled |
 
 The CD-group REPEAT/SHUFFLE codes (`KEY 47`, `KEY 1F`) were also NAKed. That's
