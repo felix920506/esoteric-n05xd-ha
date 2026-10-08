@@ -176,10 +176,11 @@ own OpenHome playlist from a test DLNA server. Replies took 30–150 ms over the
   cursor buttons are disabled by default in Home Assistant for this reason.
 - **Fixed-level outputs.** An installer can set an output to a fixed level, shown as
   `XLR2-FIX` on the display, so that a downstream amplifier controls the volume.
-  `@VOLUME` is still ACKed, the display shows the new value, and `?VOLUME` reads
-  it back, but **the audio level doesn't change**. RS-232 can't detect this
-  (`?AOUT` reports just `XLR2`). On such installs, disable the Volume number
-  entity and ignore the media player's volume control.
+  `@VOLUME` is still ACKed, the display shows the new value, and `?VOLUME` reads it
+  back, but **the audio level doesn't change**. The volume can't be changed any
+  other way either: the remote and AirPlay volume controls are ignored. RS-232 can't
+  detect this (`?AOUT` reports just `XLR2`). On such installs, disable the Volume
+  number entity and ignore the media player's volume control.
 - **Volume display.** The menu setting `VOLDP> STEP` matches the volume being
   reported in steps.
 
