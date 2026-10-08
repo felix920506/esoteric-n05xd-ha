@@ -60,10 +60,14 @@ class EsotericMediaPlayer(EsotericEntity, MediaPlayerEntity):
                 | MediaPlayerEntityFeature.STOP
                 | MediaPlayerEntityFeature.NEXT_TRACK
                 | MediaPlayerEntityFeature.PREVIOUS_TRACK
-                # DOC-MISMATCH-03 / -04: NAKed on an N-05XD while stopped.
-                | MediaPlayerEntityFeature.REPEAT_SET
-                | MediaPlayerEntityFeature.SHUFFLE_SET
             )
+            if model.repeat_shuffle_keys:
+                # The N-05XD rejects these keys (DOC-MISMATCH-03 / -04); its
+                # repeat and shuffle state is still shown, read-only.
+                features |= (
+                    MediaPlayerEntityFeature.REPEAT_SET
+                    | MediaPlayerEntityFeature.SHUFFLE_SET
+                )
         if model.volume:
             features |= (
                 MediaPlayerEntityFeature.VOLUME_SET

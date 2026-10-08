@@ -105,8 +105,8 @@ NETWORK_TRANSPORT = PlaybackKeys(
     stop="28",
     previous="24",
     next="25",
-    repeat="29",  # DOC-MISMATCH-03 on N-05XD
-    shuffle="2A",  # DOC-MISMATCH-04 on N-05XD
+    repeat="29",  # not accepted by the N-05XD (DOC-MISMATCH-03)
+    shuffle="2A",  # not accepted by the N-05XD (DOC-MISMATCH-04)
 )
 
 # 1-5-1-5 Phono EQ
@@ -147,7 +147,7 @@ REQ_INPUT = "INPUT"
 REQ_AOUT = "AOUT"
 REQ_DOUT = "DOUT"  # not on N-05XD (DOC-MISMATCH-01, resolved)
 REQ_MEDIA = "MEDIA"
-REQ_PSTS = "PSTS"  # DOC-MISMATCH-07 on N-05XD (AirPlay)
+REQ_PSTS = "PSTS"  # DOC-MISMATCH-07 on N-05XD (AirPlay only)
 REQ_PMODE = "PMODE"
 REQ_REPEAT = "REPEAT"
 REQ_UPCONV = "UPCONV"  # not on N-05XD (DOC-MISMATCH-02, resolved)
@@ -205,6 +205,8 @@ class ModelInfo:
     direct_inputs: tuple[str, ...] = ()
     # Inputs in INPUT+ order, for models that select by stepping.
     known_inputs: tuple[str, ...] = ()
+    # Whether the REPEAT / SHUFFLE keys can be used to set those modes.
+    repeat_shuffle_keys: bool = True
     # Flip to True once verified against real hardware.
     tested: bool = False
     is_generic: bool = False
@@ -262,16 +264,21 @@ C1X_INPUTS = ("XLR1", "XLR2", "XLR3", "ESLA1", "ESLA2", "ESLA3", "RCA1", "RCA2")
 #   DOC-MISMATCH-02  RESOLVED: @?UPCONV (network request) -> NAK idle and
 #                    playing; no upconversion setting in the N-05XD's menu.
 #                    Not polled.
-#   DOC-MISMATCH-03  @KEY 29  (network REPEAT)   -> NAK idle on NET and on
-#                    AirPlay (expected there); untested on a source that
-#                    supports repeat.
-#   DOC-MISMATCH-04  @KEY 2A  (network SHUFFLE)  -> as -03.
+#   DOC-MISMATCH-03  RESOLVED: @KEY 29 (network REPEAT) -> NAK in every state
+#                    tried: idle, AirPlay, and the unit's own (OpenHome)
+#                    playlist playing over DLNA with repeat active. KEY 47 /
+#                    1F / 1E (CD codes) too. @?REPEAT does follow changes
+#                    made by other controllers, so repeat is read-only.
+#   DOC-MISMATCH-04  RESOLVED: @KEY 2A (network SHUFFLE), as -03; @?PMODE
+#                    follows changes made elsewhere. Shuffle is read-only.
 #   DOC-MISMATCH-05  RESOLVED: "@CODEC" with no value and "@FS NON" only while
 #                    nothing plays; AirPlay gave "@CODEC AAC", "@FS 44.1kHz".
 #   DOC-MISMATCH-06  @POWER ON -> 0x83 instead of ACK (0x06) every time it
 #                    actually powers on. Handled: readback decides.
 #   DOC-MISMATCH-07  @?PSTS stays "PLAY 0 0 00 TE" while AirPlay is paused
 #                    (the display icon too); no track/time for AirPlay.
+#                    AirPlay only: over DLNA PAUSE, track and time are right.
+#                    Shown as reported.
 #   DOC-MISMATCH-08  @POWER ON within ~6-8 s of POWER OFF is ACKed (0x06) but
 #                    ignored; the unit stays in standby. Once it acts on POWER
 #                    ON it replies 0x83 (see -06). Handled: re-sent until
@@ -313,7 +320,8 @@ MODELS: dict[str, ModelInfo] = {
             "N-05XD",
             frozenset({_C, _N}),
             # As documented, except where a DOC-MISMATCH-xx above was
-            # confirmed on site: no DOUT (-01) or UPCONV (-02).
+            # confirmed on site: no DOUT (-01) or UPCONV (-02); repeat and
+            # shuffle are read-only (-03/-04).
             tuple(
                 req
                 for req in _requests(COMMON_REQUESTS, NETWORK_REQUESTS)
@@ -321,6 +329,7 @@ MODELS: dict[str, ModelInfo] = {
             ),
             volume=Volume(maximum=100.0, step=0.5, use_keys=False),
             known_inputs=N05XD_INPUTS,
+            repeat_shuffle_keys=False,
             tested=True,
         ),
         ModelInfo(

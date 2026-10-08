@@ -231,32 +231,35 @@ async def test_controls(hass: HomeAssistant, device: FakeEsoteric) -> None:
     assert "@KEY 5A" in device.received
 
 
-async def test_n05xd_repeat_shuffle_as_documented(hass: HomeAssistant) -> None:
-    """Repeat/shuffle are offered as documented, despite DOC-MISMATCH-03/-04."""
-    device = FakeEsoteric(toggle_keys=True)
-    await device.start()
-    try:
-        await _setup(hass, device)
-        features = hass.states.get(MP).attributes["supported_features"]
-        assert features & MediaPlayerEntityFeature.REPEAT_SET
-        assert features & MediaPlayerEntityFeature.SHUFFLE_SET
-        await _mp(hass, "repeat_set", repeat="one")
-        assert device.values["REPEAT"] == "1"
-        assert "@KEY 29" in device.received
-        await _mp(hass, "shuffle_set", shuffle=True)
-        assert device.values["PMODE"] == "SHUFFLE"
-        assert "@KEY 2A" in device.received
-    finally:
-        await device.stop()
-
-
-async def test_n05xd_repeat_nak_is_reported(
+async def test_n05xd_repeat_shuffle_read_only(
     hass: HomeAssistant, device: FakeEsoteric
 ) -> None:
-    """As observed on hardware: the NAK reaches the user as an error."""
+    """Confirmed on site: N-05XD rejects the keys but reports the modes."""
+    device.values["REPEAT"] = "ALL"
+    device.values["PMODE"] = "SHUFFLE"
     await _setup(hass, device)
-    with pytest.raises(HomeAssistantError, match="current state"):
-        await _mp(hass, "repeat_set", repeat="one")
+    attrs = hass.states.get(MP).attributes
+    assert not attrs["supported_features"] & MediaPlayerEntityFeature.REPEAT_SET
+    assert not attrs["supported_features"] & MediaPlayerEntityFeature.SHUFFLE_SET
+    assert attrs[ATTR_MEDIA_REPEAT] == "all"
+    assert attrs[ATTR_MEDIA_SHUFFLE] is True
+
+
+async def test_rejected_key_is_reported(
+    hass: HomeAssistant, device: FakeEsoteric
+) -> None:
+    """A NAK reaches the user as an error with a hint about state/menu."""
+    await _setup(hass, device)
+    with (
+        patch.object(device, "_key", lambda code: False),
+        pytest.raises(HomeAssistantError, match="current state"),
+    ):
+        await hass.services.async_call(
+            "button",
+            "press",
+            {ATTR_ENTITY_ID: "button.esoteric_n_05xd_dimmer"},
+            blocking=True,
+        )
 
 
 async def test_repeat_shuffle_on_cd_player(hass: HomeAssistant) -> None:
