@@ -34,10 +34,11 @@ It is built from the official *Esoteric RS-232C command table, Rev 1.5 (2024/9/3
 | Connection | Where the unit's RS-232C port is. See [Connection strings](#connection-strings). |
 | Model      | Your unit. This sets which entities and commands are offered. Pick **Other / generic** for a model that isn't listed. |
 | Baud rate  | Esoteric units use **9600**, so leave this at 9600. It is only sent for `rfc2217://` and local ports. |
+| Network address | Optional, for network players (N-05XD) only. See [Network control](#network-control-optional). |
 
 Under **Configure** you can change the polling interval (default 10 s) and the
-response timeout (default 1 s). **Reconfigure** changes the connection, model or baud
-rate.
+response timeout (default 1 s). **Reconfigure** changes the connection, model, baud
+rate or network address.
 
 ### Connection strings
 
@@ -97,6 +98,53 @@ Clients on a shared port can still interleave commands. The spec asks for at lea
 20 ms between commands. This integration keeps to that for its own commands, but it
 can't control what other clients send.
 
+## Network control (optional)
+
+The N-05XD's network module is an OpenHome/UPnP renderer. Adding its network
+address alongside the RS-232 connection gives Home Assistant features that RS-232
+lacks:
+
+| Feature | RS-232 only | With network address |
+|---------|-------------|----------------------|
+| Power, input, volume, dimmer, playback keys | ✓ | ✓ (still over RS-232) |
+| Track title, artist, album, artwork | – | ✓ |
+| Track duration and accurate position | – | ✓ |
+| Seeking | – | ✓ |
+| Setting repeat and shuffle | – (rejected by the N-05XD) | ✓ |
+| Updates | polled | pushed by the unit (UPnP events), or polled if events can't get through |
+
+RS-232 stays required. **The network module is switched off in standby** (no ping,
+no discovery, no HTTP). It comes up about 30 s after power-on, and only RS-232 can
+turn the unit on. The integration connects to the network side automatically
+once the unit is on and drops it in standby. Network data is only used while the
+unit is on its **NET** input and the network player is active (playing or paused).
+When stopped, the unit still reports the *previous* track, which is ignored.
+
+**Setting it up:** enter the unit's IP address in **Network address** (port 23000 is
+assumed, or give `host:port`). The unit has to be on while you do this. If Home
+Assistant is on the same subnet, a switched-on N-05XD is also **discovered
+automatically**; the discovery prompt then only asks for the RS-232 connection.
+Give the unit a DHCP reservation. If its address changes anyway, discovery
+updates it (same subnet only).
+
+### Across VLANs and subnets
+
+Control requests from Home Assistant to the unit (TCP 23000) work across subnets
+like any routed traffic. Two things don't cross subnets by themselves:
+
+- **Discovery** uses SSDP multicast. Either enter the address by hand or run an
+  SSDP relay or IGMP proxy on your router.
+- **Push updates (UPnP events)** are sent by the unit *to* Home Assistant. Allow
+  the unit's VLAN to reach Home Assistant on the event port. Under **Configure**,
+  set a fixed **Event listener port** so a firewall rule can name it. If Home
+  Assistant runs behind NAT (for example Docker with port mapping), also set the
+  **Event callback URL** to the address the unit can reach, such as
+  `http://192.168.1.10:8099/notify`.
+
+If events can't get through, the integration notices that the unit's initial
+event never arrived, logs a warning, and falls back to polling the network side
+at the polling interval. Everything still works, just less promptly.
+
 ## Supported models and entities
 
 | Model | Command groups | Media player | Volume | Input select |
@@ -124,10 +172,10 @@ Each unit gets these entities:
 
 ### Things the protocol does not provide
 
-- **No power query.** Power state is inferred. If the unit answers any status
-  request, it is considered on. If it NAKs or ignores the first few, it is
-  considered in standby. While in standby, only a few requests are sent per poll.
-  This still has to be checked against real hardware.
+- **No power query.** Power state is inferred. The N-05XD keeps answering in
+  standby and reports `@INPUT OFF`, which is used as the standby signal. For other
+  models, a unit that NAKs or ignores the first few requests is considered in
+  standby. While in standby, only a few requests are sent per poll.
 - **No mute state.** Mute is a toggle button only.
 - **No input list query.** Models without direct input select (N-05XD, F-01/02)
   change source by pressing INPUT+ until the unit reports the input you asked for.
@@ -136,7 +184,9 @@ Each unit gets these entities:
 - **Requests can be state-dependent.** A request that gets three NAKs in a row is
   polled much less often (once every 30 polls), not dropped for good.
 - **Repeat and shuffle are toggle keys.** Setting them presses the key until the
-  unit reports the requested mode.
+  unit reports the requested mode. The N-05XD rejects these keys; with a
+  [network address](#network-control-optional) they are set over the network
+  instead.
 
 ## N-05XD hardware results
 
@@ -183,6 +233,25 @@ own OpenHome playlist from a test DLNA server. Replies took 30–150 ms over the
   number entity and ignore the media player's volume control.
 - **Volume display.** The menu setting `VOLDP> STEP` matches the volume being
   reported in steps.
+
+### Network side (OpenHome)
+
+These were tested with the network address configured, on 2026-10-08, against
+the same unit:
+
+| What | Result |
+|------|--------|
+| Standby | The network module is completely off: no ping, no SSDP, port 23000 closed. |
+| After POWER ON | The network side is reachable after about 30 s, on the same port (23000). |
+| Events | Subscriptions accepted (12 h timeout). The initial state arrives immediately, and changes arrive within about 0.1 s. |
+| Polling fallback | Works when events can't reach Home Assistant. |
+| Repeat / shuffle | Set through `Transport.SetRepeat("true"/"false")` and `SetShuffle`. RS-232 `?REPEAT` / `?PMODE` follow the change. |
+| Playback from a DLNA server | Title, album, duration and artwork (proxied by Home Assistant) appear within about 1 s. Seek, pause and stop work. Stopping clears the metadata. |
+| Track artist | minidlna puts the track artist in `dc:creator` and the album artist in a plain `upnp:artist`, and both are handled. |
+| Stopped | Info still reports the previous track. It is not shown in Home Assistant. |
+
+Not tested yet: what the network side reports during AirPlay, the port after
+unplugging the unit from mains, and control from a different subnet.
 
 ### Differences from the command table
 
@@ -244,9 +313,14 @@ python3.13 -m venv .venv
 .venv/bin/pytest
 ```
 
-The tests run against a simulated unit (`tests/fake_device.py`). It is a shared-port
-TCP server with optional RFC 2217 negotiation. The local serial backend is tested
-through a pseudo-terminal. No real hardware is needed.
+The tests run against simulated hardware, so no real unit is needed:
+
+- `tests/fake_device.py` is the RS-232 side: a shared-port TCP server with optional
+  RFC 2217 negotiation.
+- `tests/fake_openhome.py` is the network side. It serves the description and
+  service files captured from a real N-05XD (`tests/fixtures/n05xd_upnp`), with
+  its MAC-derived UUID replaced, and sends UPnP events.
+- The local serial backend is tested through a pseudo-terminal.
 
 Code layout:
 
@@ -255,7 +329,8 @@ Code layout:
 | `transport.py` | Pluggable byte transports: TCP, RFC 2217, local serial, plus `register_backend()`. Has no Home Assistant imports. |
 | `protocol.py` | Framing, ACK/NAK handling, request matching, and the reconnect loop. Has no Home Assistant imports. |
 | `models.py` | Per-model capabilities and key codes, taken from the command table. |
-| `coordinator.py` | Polling, push updates, standby detection, and higher-level actions. |
+| `network.py` | Optional OpenHome/UPnP side: metadata, repeat/shuffle, seek, events with polling fallback. Has no Home Assistant imports. |
+| `coordinator.py` | Polling, push updates, standby detection, network upkeep, and higher-level actions. |
 
 ## Disclaimer
 
