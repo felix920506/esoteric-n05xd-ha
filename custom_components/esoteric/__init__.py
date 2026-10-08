@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 import voluptuous as vol
+from homeassistant.components.network import async_get_source_ip
 from homeassistant.const import Platform
 from homeassistant.core import (
     HomeAssistant,
@@ -16,18 +19,23 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     ATTR_COMMAND,
     ATTR_CONFIG_ENTRY_ID,
     CONF_BAUDRATE,
+    CONF_CALLBACK_URL,
     CONF_CONNECTION,
+    CONF_EVENT_PORT,
     CONF_MODEL,
+    CONF_NETWORK_URL,
     CONF_RESPONSE_TIMEOUT,
     CONF_SCAN_INTERVAL,
     CONNECT_TIMEOUT,
     DEFAULT_BAUDRATE,
+    DEFAULT_EVENT_PORT,
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -35,6 +43,7 @@ from .const import (
 )
 from .coordinator import EsotericConfigEntry, EsotericCoordinator
 from .models import MODELS
+from .network import EsotericNetwork
 from .protocol import CommandRejectedError, EsotericClient, EsotericError
 
 PLATFORMS = [Platform.BUTTON, Platform.MEDIA_PLAYER, Platform.NUMBER, Platform.SENSOR]
@@ -102,6 +111,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: EsotericConfigEntry) -> 
         client,
         model,
         entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+        await _async_create_network(hass, entry),
     )
     await coordinator.async_start()
     if not await client.wait_connected(CONNECT_TIMEOUT):
@@ -124,3 +134,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: EsotericConfigEntry) ->
     if unloaded := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         await entry.runtime_data.async_stop()
     return unloaded
+
+
+async def _async_create_network(
+    hass: HomeAssistant, entry: EsotericConfigEntry
+) -> EsotericNetwork | None:
+    """Set up the optional OpenHome side, if a network address is configured."""
+    if not (url := entry.data.get(CONF_NETWORK_URL)):
+        return None
+    return EsotericNetwork(
+        async_get_clientsession(hass),
+        url,
+        # Listen on the address that routes to the unit (matters with
+        # several interfaces/VLANs).
+        listen_host=await async_get_source_ip(hass, target_ip=urlsplit(url).hostname),
+        listen_port=int(entry.options.get(CONF_EVENT_PORT, DEFAULT_EVENT_PORT)),
+        callback_url=entry.options.get(CONF_CALLBACK_URL) or None,
+    )

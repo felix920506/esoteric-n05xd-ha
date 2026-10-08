@@ -297,6 +297,9 @@ C1X_INPUTS = ("XLR1", "XLR2", "XLR3", "ESLA1", "ESLA2", "ESLA3", "RCA1", "RCA2")
 #   * Direct "@INPUT <name>" is NAKed (the table documents it only for C1X /
 #     C1X solo / E1), as are the CD-group REPEAT/SHUFFLE codes KEY 47 / 1F.
 
+# The input that plays from the network module (OpenHome renderer).
+NET_INPUT = "NET"
+
 # Read from a real N-05XD by pressing INPUT+ (KEY 20).
 N05XD_INPUTS = (
     "NET",

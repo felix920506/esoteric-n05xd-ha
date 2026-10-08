@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from homeassistant.components.media_player import (
     MediaPlayerDeviceClass,
@@ -13,11 +13,13 @@ from homeassistant.components.media_player import (
     RepeatMode,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import STANDBY_INPUT, EsotericConfigEntry, EsotericCoordinator
 from .entity import EsotericEntity
-from .models import REQ_INPUT, REQ_PMODE, REQ_PSTS, REQ_REPEAT, Category
+from .models import NET_INPUT, REQ_INPUT, REQ_PMODE, REQ_PSTS, REQ_REPEAT, Category
+from .network import EsotericNetwork, NetworkError
 
 PARALLEL_UPDATES = 1
 
@@ -31,6 +33,14 @@ HA_TO_REPEAT = {mode: value for value, mode in REPEAT_TO_HA.items()}
 SHUFFLE = "SHUFFLE"
 # @PSTS PLAY <track> <min> <sec> <TE|TR|DE|DR>; only TE is a track position.
 TRACK_ELAPSED = "TE"
+# OpenHome transport states in which Info/Time describe what is playing. When
+# stopped, Info still holds the previous track.
+NETWORK_STATES = {
+    "Playing": MediaPlayerState.PLAYING,
+    "Paused": MediaPlayerState.PAUSED,
+    "Buffering": MediaPlayerState.BUFFERING,
+}
+NETWORK_ACTIVE = tuple(NETWORK_STATES)
 
 
 async def async_setup_entry(
@@ -75,13 +85,80 @@ class EsotericMediaPlayer(EsotericEntity, MediaPlayerEntity):
             )
         if model.direct_inputs or model.input_next_code:
             features |= MediaPlayerEntityFeature.SELECT_SOURCE
-        self._attr_supported_features = features
+        self._base_features = features
         if model.categories & {Category.AMP, Category.PHONO}:
             self._attr_device_class = MediaPlayerDeviceClass.RECEIVER
 
     @property
     def _state(self):
         return self.coordinator.data
+
+    @property
+    def _net(self) -> EsotericNetwork | None:
+        """The network side, while connected and the unit is on NET."""
+        network = self.coordinator.network
+        if network is None or not network.connected:
+            return None
+        if self._state.value(REQ_INPUT) != NET_INPUT:
+            return None
+        return network
+
+    @property
+    def _net_active(self) -> EsotericNetwork | None:
+        """The network side, while it is the one playing."""
+        network = self._net
+        if network is None or network.state.transport_state not in NETWORK_ACTIVE:
+            return None
+        return network
+
+    @property
+    def supported_features(self) -> MediaPlayerEntityFeature:
+        """Features; repeat/shuffle/seek come from the network side if any."""
+        features = self._base_features
+        if (net := self._net) is not None:
+            if net.state.can_repeat:
+                features |= MediaPlayerEntityFeature.REPEAT_SET
+            if net.state.can_shuffle:
+                features |= MediaPlayerEntityFeature.SHUFFLE_SET
+            if net.state.can_seek and self._net_active is not None:
+                features |= MediaPlayerEntityFeature.SEEK
+        return features
+
+    @property
+    def media_title(self) -> str | None:
+        """Track title (network side only)."""
+        net = self._net_active
+        return net.state.track.title if net else None
+
+    @property
+    def media_artist(self) -> str | None:
+        """Artist (network side only)."""
+        net = self._net_active
+        return net.state.track.artist if net else None
+
+    @property
+    def media_album_name(self) -> str | None:
+        """Album (network side only)."""
+        net = self._net_active
+        return net.state.track.album if net else None
+
+    @property
+    def media_album_artist(self) -> str | None:
+        """Album artist (network side only)."""
+        net = self._net_active
+        return net.state.track.album_artist if net else None
+
+    @property
+    def media_image_url(self) -> str | None:
+        """Artwork (network side only); proxied by Home Assistant."""
+        net = self._net_active
+        return net.state.track.image_url if net else None
+
+    @property
+    def media_duration(self) -> int | None:
+        """Track length (network side only)."""
+        net = self._net_active
+        return net.state.duration if net else None
 
     @property
     def _playback(self) -> tuple[str, ...]:
@@ -92,6 +169,9 @@ class EsotericMediaPlayer(EsotericEntity, MediaPlayerEntity):
         """Current state."""
         if self._state.power is False:
             return MediaPlayerState.OFF
+        if (net := self._net_active) is not None:
+            # Pushed by the network player; RS-232 PSTS is only polled.
+            return NETWORK_STATES[net.state.transport_state]
         if playback := self._playback:
             return PLAYBACK_STATES.get(playback[0].upper(), MediaPlayerState.ON)
         return MediaPlayerState.ON
@@ -107,6 +187,8 @@ class EsotericMediaPlayer(EsotericEntity, MediaPlayerEntity):
     @property
     def media_position(self) -> int | None:
         """Elapsed time within the track."""
+        if (net := self._net_active) is not None and net.state.position is not None:
+            return net.state.position
         playback = self._playback
         if len(playback) < 5 or playback[4] != TRACK_ELAPSED:
             return None
@@ -118,6 +200,8 @@ class EsotericMediaPlayer(EsotericEntity, MediaPlayerEntity):
     @property
     def media_position_updated_at(self) -> datetime | None:
         """When the position was read."""
+        if (net := self._net_active) is not None and net.state.position_at:
+            return datetime.fromtimestamp(net.state.position_at, UTC)
         if self.media_position is None:
             return None
         return self._state.received_at.get(REQ_PSTS)
@@ -149,11 +233,15 @@ class EsotericMediaPlayer(EsotericEntity, MediaPlayerEntity):
     @property
     def repeat(self) -> RepeatMode | None:
         """Repeat mode."""
+        if (net := self._net) is not None and net.state.repeat is not None:
+            return RepeatMode.ALL if net.state.repeat else RepeatMode.OFF
         return REPEAT_TO_HA.get((self._state.value(REQ_REPEAT) or "").upper())
 
     @property
     def shuffle(self) -> bool | None:
         """Shuffle on/off."""
+        if (net := self._net) is not None and net.state.shuffle is not None:
+            return net.state.shuffle
         mode = self._state.value(REQ_PMODE)
         return None if mode is None else mode.upper() == SHUFFLE
 
@@ -192,24 +280,53 @@ class EsotericMediaPlayer(EsotericEntity, MediaPlayerEntity):
         await self._playback_key("previous")
 
     async def async_set_repeat(self, repeat: RepeatMode) -> None:
-        """Press REPEAT until the requested mode is reached."""
+        """Set repeat over the network if possible, else press REPEAT."""
+        if (net := self._net) is not None and net.state.can_repeat:
+            if repeat is RepeatMode.ONE:
+                raise ServiceValidationError(
+                    "Repeat one is not supported; use repeat all or off"
+                )
+            await self._network_call(net.async_set_repeat(repeat is RepeatMode.ALL))
+            return
         playback = self.coordinator.model.playback
-        assert playback is not None
+        if playback is None or not self.coordinator.model.repeat_shuffle_keys:
+            raise HomeAssistantError(
+                "Repeat can only be set over the network connection on this model"
+            )
         target = HA_TO_REPEAT[repeat]
         await self.coordinator.async_cycle(
             playback.repeat, REQ_REPEAT, lambda msg: msg.value.upper() == target, 3
         )
 
     async def async_set_shuffle(self, shuffle: bool) -> None:
-        """Press SHUFFLE until the requested state is reached."""
+        """Set shuffle over the network if possible, else press SHUFFLE."""
+        if (net := self._net) is not None and net.state.can_shuffle:
+            await self._network_call(net.async_set_shuffle(shuffle))
+            return
         playback = self.coordinator.model.playback
-        assert playback is not None
+        if playback is None or not self.coordinator.model.repeat_shuffle_keys:
+            raise HomeAssistantError(
+                "Shuffle can only be set over the network connection on this model"
+            )
         await self.coordinator.async_cycle(
             playback.shuffle,
             REQ_PMODE,
             lambda msg: (msg.value.upper() == SHUFFLE) == shuffle,
             3,
         )
+
+    async def async_media_seek(self, position: float) -> None:
+        """Seek (network side only)."""
+        net = self._net_active
+        if net is None:
+            raise HomeAssistantError("Seeking needs the network connection")
+        await self._network_call(net.async_seek(position))
+
+    async def _network_call(self, call) -> None:
+        try:
+            await call
+        except NetworkError as err:
+            raise HomeAssistantError(str(err)) from err
 
     async def async_set_volume_level(self, volume: float) -> None:
         """Set volume 0..1."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -12,7 +13,8 @@ from homeassistant.config_entries import (
     OptionsFlowWithReload,
 )
 from homeassistant.const import CONF_NAME
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
@@ -22,21 +24,33 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
     TextSelector,
 )
+from homeassistant.helpers.service_info.ssdp import (
+    ATTR_UPNP_FRIENDLY_NAME,
+    ATTR_UPNP_UDN,
+    SsdpServiceInfo,
+)
 
 from .const import (
     CONF_BAUDRATE,
+    CONF_CALLBACK_URL,
     CONF_CONNECTION,
+    CONF_EVENT_PORT,
     CONF_MODEL,
+    CONF_NETWORK,
+    CONF_NETWORK_UDN,
+    CONF_NETWORK_URL,
     CONF_RESPONSE_TIMEOUT,
     CONF_SCAN_INTERVAL,
     CONNECT_TIMEOUT,
     DEFAULT_BAUDRATE,
+    DEFAULT_EVENT_PORT,
     DEFAULT_RESPONSE_TIMEOUT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
 from .coordinator import EsotericConfigEntry
-from .models import MODELS
+from .models import MODELS, Category
+from .network import NetworkError, async_probe, description_url
 from .protocol import ConnectionDroppedError, EsotericClient
 from .transport import InvalidUrlError, parse_url
 
@@ -75,15 +89,23 @@ def _connection_schema(defaults: dict[str, Any], *, with_name: bool) -> vol.Sche
                     mode=SelectSelectorMode.DROPDOWN,
                 )
             ),
+            vol.Optional(
+                CONF_NETWORK,
+                description={
+                    "suggested_value": defaults.get(
+                        CONF_NETWORK, defaults.get(CONF_NETWORK_URL)
+                    )
+                },
+            ): TextSelector(),
         }
     )
     return vol.Schema(fields)
 
 
 async def _validate(
-    user_input: dict[str, Any],
+    hass: HomeAssistant, user_input: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    """Normalize the input and try to open the connection."""
+    """Normalize the input and try to open the connection(s)."""
     errors: dict[str, str] = {}
     data = {
         CONF_CONNECTION: user_input[CONF_CONNECTION].strip(),
@@ -116,7 +138,41 @@ async def _validate(
         errors["base"] = "cannot_connect"
     finally:
         await client.stop()
+    if not errors:
+        await _validate_network(hass, user_input, data, errors)
     return data, errors
+
+
+async def _validate_network(
+    hass: HomeAssistant,
+    user_input: dict[str, Any],
+    data: dict[str, Any],
+    errors: dict[str, str],
+) -> None:
+    """Check the optional network address and store its description URL."""
+    if not (address := (user_input.get(CONF_NETWORK) or "").strip()):
+        return
+    if Category.NETWORK not in MODELS[data[CONF_MODEL]].categories:
+        errors[CONF_NETWORK] = "network_not_supported"
+        return
+    try:
+        url = description_url(address)
+    except ValueError:
+        errors[CONF_NETWORK] = "invalid_network"
+        return
+    try:
+        udn, _ = await async_probe(async_get_clientsession(hass), url)
+    except NetworkError as err:
+        # The network module is off in standby.
+        _LOGGER.debug("Network side not reachable: %s", err)
+        errors[CONF_NETWORK] = "network_unreachable"
+        return
+    except ValueError as err:
+        _LOGGER.debug("Not an Esoteric network player: %s", err)
+        errors[CONF_NETWORK] = "network_not_esoteric"
+        return
+    data[CONF_NETWORK_URL] = url
+    data[CONF_NETWORK_UDN] = udn
 
 
 class EsotericConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -124,15 +180,53 @@ class EsotericConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        """Initialize."""
+        self._discovered: dict[str, Any] = {}
+
+    async def async_step_ssdp(
+        self, discovery_info: SsdpServiceInfo
+    ) -> ConfigFlowResult:
+        """A network player announced itself; ask for its RS-232 connection."""
+        url = discovery_info.ssdp_location
+        udn = discovery_info.upnp.get(ATTR_UPNP_UDN) or discovery_info.ssdp_udn
+        friendly = discovery_info.upnp.get(ATTR_UPNP_FRIENDLY_NAME, "")
+        for entry in self._async_current_entries(include_ignore=False):
+            if udn and entry.data.get(CONF_NETWORK_UDN) == udn:
+                # Known unit; follow DHCP address changes.
+                if url and entry.data.get(CONF_NETWORK_URL) != url:
+                    self.hass.config_entries.async_update_entry(
+                        entry, data={**entry.data, CONF_NETWORK_URL: url}
+                    )
+                    self.hass.config_entries.async_schedule_reload(entry.entry_id)
+                return self.async_abort(reason="already_configured")
+        await self.async_set_unique_id(udn)
+        self._abort_if_unique_id_configured()
+        model = next(
+            (
+                model.model_id
+                for model in MODELS.values()
+                if Category.NETWORK in model.categories
+                and model.name.upper() in friendly.upper()
+            ),
+            "n_05xd",
+        )
+        name = friendly.split(":")[0] or MODELS[model].name
+        self._discovered = {CONF_NETWORK: url, CONF_MODEL: model, CONF_NAME: name}
+        self.context["title_placeholders"] = {"name": name}
+        return await self.async_step_user()
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Ask for the connection and model."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            data, errors = await _validate(user_input)
+            data, errors = await _validate(self.hass, user_input)
             if not errors:
-                await self.async_set_unique_id(data[CONF_CONNECTION])
+                await self.async_set_unique_id(
+                    data[CONF_CONNECTION], raise_on_progress=False
+                )
                 self._abort_if_unique_id_configured()
                 title = (user_input.get(CONF_NAME) or "").strip() or (
                     f"Esoteric {MODELS[data[CONF_MODEL]].name}"
@@ -140,7 +234,9 @@ class EsotericConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title=title, data=data)
         return self.async_show_form(
             step_id="user",
-            data_schema=_connection_schema(user_input or {}, with_name=True),
+            data_schema=_connection_schema(
+                user_input or self._discovered, with_name=True
+            ),
             errors=errors,
         )
 
@@ -151,7 +247,7 @@ class EsotericConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
         if user_input is not None:
-            data, errors = await _validate(user_input)
+            data, errors = await _validate(self.hass, user_input)
             if not errors:
                 if any(
                     other.entry_id != entry.entry_id
@@ -217,6 +313,26 @@ class EsotericOptionsFlow(OptionsFlowWithReload):
                             mode=NumberSelectorMode.BOX,
                         )
                     ),
+                    **self._network_options(options),
                 }
             ),
         )
+
+    def _network_options(self, options: Mapping[str, Any]) -> dict[Any, Any]:
+        """Event listener options, when a network address is configured."""
+        if not self.config_entry.data.get(CONF_NETWORK_URL):
+            return {}
+        return {
+            vol.Required(
+                CONF_EVENT_PORT,
+                default=options.get(CONF_EVENT_PORT, DEFAULT_EVENT_PORT),
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0, max=65535, step=1, mode=NumberSelectorMode.BOX
+                )
+            ),
+            vol.Optional(
+                CONF_CALLBACK_URL,
+                description={"suggested_value": options.get(CONF_CALLBACK_URL)},
+            ): TextSelector(),
+        }

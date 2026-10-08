@@ -30,4 +30,20 @@ async def async_get_config_entry_diagnostics(
         "unsupported_requests": sorted(state.unsupported),
         "last_messages": {key: msg.raw for key, msg in state.messages.items()},
         "learned_inputs": coordinator.learned_inputs,
+        "network": _network(coordinator),
+    }
+
+
+def _network(coordinator) -> dict[str, Any] | None:
+    network = coordinator.network
+    if network is None:
+        return None
+    state = asdict(network.state)
+    state.pop("track_uri", None)  # may reveal library paths
+    return {
+        "url": network.url,
+        "connected": network.connected,
+        "events": network.events,
+        "callback_url": network.callback_url,
+        "state": state,
     }

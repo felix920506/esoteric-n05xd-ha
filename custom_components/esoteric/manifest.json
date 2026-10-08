@@ -3,12 +3,13 @@
   "name": "Esoteric RS-232C",
   "codeowners": ["@felix920506"],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": ["network"],
   "documentation": "https://github.com/felix920506/esoteric-n05xd",
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/felix920506/esoteric-n05xd/issues",
   "loggers": ["custom_components.esoteric"],
-  "requirements": ["pyserial-asyncio-fast>=0.16"],
+  "requirements": ["pyserial-asyncio-fast>=0.16", "async-upnp-client>=0.44"],
+  "ssdp": [{ "manufacturer": "ESOTERIC COMPANY" }],
   "version": "0.1.0"
 }

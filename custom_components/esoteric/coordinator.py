@@ -18,6 +18,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .models import AMP_VOLUME_DOWN, AMP_VOLUME_UP, REQ_INPUT, REQ_VOLUME, ModelInfo
+from .network import EsotericNetwork, NetworkError
 from .protocol import (
     CommandRejectedError,
     EsotericClient,
@@ -47,6 +48,9 @@ POWER_SETTLE = 1.0
 # How long to keep re-sending POWER ON while the unit is still shutting down.
 POWER_ON_RETRY_WINDOW = 15.0
 STORAGE_VERSION = 1
+# Retry backoff for the network side, which needs ~30 s after POWER ON.
+NETWORK_RETRY_MIN = 10.0
+NETWORK_RETRY_MAX = 30.0
 
 type EsotericConfigEntry = ConfigEntry[EsotericCoordinator]
 
@@ -91,6 +95,7 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         client: EsotericClient,
         model: ModelInfo,
         scan_interval: int,
+        network: EsotericNetwork | None = None,
     ) -> None:
         """Initialize."""
         super().__init__(
@@ -111,6 +116,12 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         )
         self.learned_inputs: list[str] = list(model.known_inputs)
         self._polls = 0
+        self.network = network
+        if network is not None:
+            network.on_update = self.async_update_listeners
+        self._network_task: asyncio.Task[None] | None = None
+        self._network_backoff = NETWORK_RETRY_MIN
+        self._network_retry_at = 0.0
 
     async def async_start(self) -> None:
         """Hook up listeners and start the connection loop."""
@@ -125,7 +136,44 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         """Disconnect."""
         while self._unsubs:
             self._unsubs.pop()()
+        if self._network_task is not None:
+            self._network_task.cancel()
+        if self.network is not None:
+            await self.network.async_disconnect()
         await self.client.stop()
+
+    @callback
+    def schedule_network_upkeep(self, *, now: bool = False) -> None:
+        """Connect/refresh/disconnect the network side in the background."""
+        if self.network is None:
+            return
+        if self._network_task is not None and not self._network_task.done():
+            return
+        if now:
+            self._network_retry_at = 0.0
+        self._network_task = self.config_entry.async_create_background_task(
+            self.hass, self._async_network_upkeep(), "esoteric network"
+        )
+
+    async def _async_network_upkeep(self) -> None:
+        network = self.network
+        assert network is not None
+        # The network module is off in standby, so only try while on.
+        want = bool(self.data.power) and self.client.connected
+        try:
+            if want and not network.connected:
+                if time.monotonic() < self._network_retry_at:
+                    return
+                await network.async_connect()
+            elif want:
+                await network.async_refresh()
+            elif network.connected:
+                await network.async_disconnect()
+            self._network_backoff = NETWORK_RETRY_MIN
+        except NetworkError as err:
+            _LOGGER.debug("Network side not available: %s", err)
+            self._network_retry_at = time.monotonic() + self._network_backoff
+            self._network_backoff = min(self._network_backoff * 2, NETWORK_RETRY_MAX)
 
     @callback
     def _on_message(self, message: Message) -> None:
@@ -136,7 +184,9 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         self._strikes.pop(message.key, None)
         if message.key == REQ_INPUT and message.value:
             if message.value == STANDBY_INPUT:
-                state.power = False
+                if state.power is not False:
+                    state.power = False
+                    self.schedule_network_upkeep(now=True)
             else:
                 state.power = True
                 self._learn_input(message.value)
@@ -159,6 +209,12 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         self._store.async_delay_save(lambda: self.learned_inputs, 5)
 
     async def _async_update_data(self) -> EsotericState:
+        try:
+            return await self._async_poll_serial()
+        finally:
+            self.schedule_network_upkeep()
+
+    async def _async_poll_serial(self) -> EsotericState:
         if not self.client.connected:
             raise UpdateFailed(f"Not connected to {self.client.url}")
         state = self.data
@@ -250,6 +306,7 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
             raise self._command_error(command, acked)
         self.data.power = on
         self.async_update_listeners()
+        self.schedule_network_upkeep(now=True)
 
     async def _send_power(self, command: str) -> ResponseTimeoutError | bool:
         """Send POWER ON/OFF; return True on ACK or the timeout error."""

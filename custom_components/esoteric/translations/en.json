@@ -8,13 +8,15 @@
           "name": "Name",
           "connection": "Connection",
           "model": "Model",
-          "baudrate": "Baud rate"
+          "baudrate": "Baud rate",
+          "network": "Network address (optional)"
         },
         "data_description": {
           "name": "Optional. Defaults to the model name.",
           "connection": "`socket://host:port` for a raw TCP serial server (set 9600 8N1 on the server), `rfc2217://host:port` if the server lets clients set the baud rate (RFC 2217), or a local port such as `/dev/ttyUSB0` / `COM3`.",
           "model": "Models other than the N-05XD have not been tested on real hardware.",
-          "baudrate": "Esoteric units use 9600. Only sent for rfc2217:// and local serial ports; for socket:// configure it on the serial server."
+          "baudrate": "Esoteric units use 9600. Only sent for rfc2217:// and local serial ports; for socket:// configure it on the serial server.",
+          "network": "Network players (N-05XD) only: the unit's IP address, `host:port` or description URL (default port 23000). Adds track info, artwork, seeking, and setting repeat/shuffle over the network. The unit must be switched on to check it: its network side is off in standby. Leave empty to use RS-232 only."
         }
       },
       "reconfigure": {
@@ -22,12 +24,14 @@
         "data": {
           "connection": "Connection",
           "model": "Model",
-          "baudrate": "Baud rate"
+          "baudrate": "Baud rate",
+          "network": "Network address (optional)"
         },
         "data_description": {
           "connection": "`socket://host:port` for a raw TCP serial server (set 9600 8N1 on the server), `rfc2217://host:port` if the server lets clients set the baud rate (RFC 2217), or a local port such as `/dev/ttyUSB0` / `COM3`.",
           "model": "Models other than the N-05XD have not been tested on real hardware.",
-          "baudrate": "Esoteric units use 9600. Only sent for rfc2217:// and local serial ports; for socket:// configure it on the serial server."
+          "baudrate": "Esoteric units use 9600. Only sent for rfc2217:// and local serial ports; for socket:// configure it on the serial server.",
+          "network": "Network players (N-05XD) only: the unit's IP address, `host:port` or description URL (default port 23000). Adds track info, artwork, seeking, and setting repeat/shuffle over the network. The unit must be switched on to check it: its network side is off in standby. Leave empty to use RS-232 only."
         }
       }
     },
@@ -35,23 +39,32 @@
       "cannot_connect": "Could not open the connection.",
       "invalid_connection": "Not a valid connection string.",
       "invalid_baudrate": "Baud rate must be a positive whole number.",
-      "port_busy": "The serial server closed the connection immediately. It probably allows only one client per port and another client is connected; disconnect it or raise the server's connection limit."
+      "port_busy": "The serial server closed the connection immediately. It probably allows only one client per port and another client is connected; disconnect it or raise the server's connection limit.",
+      "invalid_network": "Not a valid network address.",
+      "network_unreachable": "Could not reach the unit over the network. Make sure it is switched on (the network side is off in standby) and that Home Assistant can reach that address and port.",
+      "network_not_esoteric": "That address is not an Esoteric network player.",
+      "network_not_supported": "This model has no network control; leave the network address empty."
     },
     "abort": {
       "already_configured": "This connection is already configured.",
       "reconfigure_successful": "Reconfiguration was successful."
-    }
+    },
+    "flow_title": "{name}"
   },
   "options": {
     "step": {
       "init": {
         "data": {
           "scan_interval": "Polling interval",
-          "response_timeout": "Response timeout"
+          "response_timeout": "Response timeout",
+          "event_port": "Event listener port",
+          "callback_url": "Event callback URL"
         },
         "data_description": {
           "scan_interval": "How often to read the unit's status.",
-          "response_timeout": "How long to wait for ACK or a reply. The unit answers within 50 ms; raise this for slow serial servers."
+          "response_timeout": "How long to wait for ACK or a reply. The unit answers within 50 ms; raise this for slow serial servers.",
+          "event_port": "Port Home Assistant listens on for UPnP events from the unit. 0 picks a free port; set a fixed port to allow it through a firewall between VLANs.",
+          "callback_url": "Only needed when the unit can't reach Home Assistant at its own address, e.g. behind NAT or Docker port mapping: the full URL the unit should send events to, like `http://192.168.1.10:8099/notify`. Without working events the integration polls instead."
         }
       }
     }
