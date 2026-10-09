@@ -251,6 +251,45 @@ async def test_reconnects(client: EsotericClient, device: FakeEsoteric):
     assert (await client.request("INPUT")).value == "NET"
 
 
+async def test_busy_single_client_port_backs_off(caplog: pytest.LogCaptureFixture):
+    """A server that accepts and drops at once must not be hammered."""
+    device = FakeEsoteric(single_client=True)
+    await device.start()
+    _, holder = await asyncio.open_connection("127.0.0.1", device.port)
+    client = EsotericClient(device.url)
+    try:
+        await client.start()
+        await asyncio.sleep(3.5)
+        # 1 s, 2 s backoff: about 2-3 attempts, not one per second forever.
+        assert 2 <= client.stats.connects <= 3
+        assert "probably in use by another client" in caplog.text
+        warnings = [
+            r for r in caplog.records if r.levelname == "WARNING" and "in use" in r.msg
+        ]
+        assert len(warnings) == 1  # warned once, then debug
+        assert "dropped right after connecting" in client.stats.last_error
+    finally:
+        holder.close()
+        await client.stop()
+        await device.stop()
+
+
+async def test_unexpected_error_does_not_kill_the_loop(
+    client: EsotericClient, device: FakeEsoteric, monkeypatch: pytest.MonkeyPatch
+):
+    """A bug in parsing must not leave the client disconnected for good."""
+    states: list[bool] = []
+    client.add_connection_listener(states.append)
+
+    def boom(data: bytes):
+        raise ValueError("bug")
+
+    monkeypatch.setattr(client._parser, "feed", boom)  # noqa: SLF001
+    device.send(b"@INPUT NET\r")
+    await _until(lambda: states[:2] == [False, True], timeout=5)
+    assert (await client.request("INPUT")).value == "NET"
+
+
 async def test_rfc2217_end_to_end():
     device = FakeEsoteric(rfc2217=True)
     await device.start()

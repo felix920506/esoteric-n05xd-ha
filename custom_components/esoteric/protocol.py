@@ -51,6 +51,10 @@ COMMAND_INTERVAL = 0.03
 MAX_LINE = 256
 RECONNECT_MIN = 1.0
 RECONNECT_MAX = 30.0
+# A connection dropped within this many seconds counts as refused.
+BUSY_DROP = 2.0
+# A connection that lasted this long resets the reconnect backoff.
+STABLE_CONNECTION = 30.0
 
 # Keys that only ever appear as host -> unit commands. If a server echoes
 # client traffic we must not mistake these for status.
@@ -291,26 +295,55 @@ class EsotericClient:
 
     async def _run(self) -> None:
         delay = RECONNECT_MIN
+        busy_warned = False
         while not self._stopping:
             try:
                 await self.connect()
             except (OSError, TimeoutError) as err:
                 self.stats.last_error = f"connect: {err!r}"
                 _LOGGER.debug("Connecting to %s failed: %r", self.url, err)
+            except Exception as err:
+                # Keep the loop alive whatever happens; a dead loop would
+                # leave the integration unavailable until a restart.
+                self.stats.last_error = f"connect: {err!r}"
+                _LOGGER.exception("Unexpected error connecting to %s", self.url)
             else:
-                delay = RECONNECT_MIN
                 self.stats.connects += 1
                 _LOGGER.info("Connected to %s", self.url)
+                connected_at = time.monotonic()
                 self._set_connected(True)
                 try:
                     await self._read_loop()
                 except (OSError, ConnectionError) as err:
                     self.stats.last_error = f"read: {err!r}"
-                    _LOGGER.warning("Lost connection to %s: %s", self.url, err)
+                    if time.monotonic() - connected_at < BUSY_DROP:
+                        # Accepted, then dropped at once: typically a
+                        # single-client serial server whose port is in use.
+                        self.stats.last_error = (
+                            f"dropped right after connecting: {err!r}"
+                        )
+                        log = _LOGGER.warning if not busy_warned else _LOGGER.debug
+                        log(
+                            "%s closed the connection right after accepting it; "
+                            "the serial port is probably in use by another "
+                            "client. Retrying",
+                            self.url,
+                        )
+                        busy_warned = True
+                    else:
+                        _LOGGER.warning("Lost connection to %s: %s", self.url, err)
+                except Exception as err:
+                    self.stats.last_error = f"read: {err!r}"
+                    _LOGGER.exception("Unexpected error reading from %s", self.url)
                 finally:
                     self.stats.disconnects += 1
                     self._set_connected(False)
                     await self._close()
+                if time.monotonic() - connected_at >= STABLE_CONNECTION:
+                    # Only a connection that lasted resets the backoff, so a
+                    # server that drops us at once isn't hammered.
+                    delay = RECONNECT_MIN
+                    busy_warned = False
             if self._stopping:
                 break
             await asyncio.sleep(delay)
