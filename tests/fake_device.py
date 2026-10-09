@@ -209,7 +209,10 @@ class FakeEsoteric:
             if not self.power and key in STANDBY_VALUES:
                 self.send(f"@{key} {STANDBY_VALUES[key]}\r".encode(), writer)
             elif key in self.values and key not in self.unsupported:
-                self.send(f"@{key} {self.values[key]}\r".encode(), writer)
+                value = self.values[key]
+                if key == "VOLUME" and float(value) >= 100:
+                    value = "10.0"  # what a real N-05XD reports (DOC-MISMATCH-09)
+                self.send(f"@{key} {value}\r".encode(), writer)
             else:
                 self.send(NAK, writer)
             return

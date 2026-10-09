@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -49,6 +50,11 @@ POWER_SETTLE = 1.0
 # How long to keep re-sending POWER ON while the unit is still shutting down.
 POWER_ON_RETRY_WINDOW = 15.0
 STORAGE_VERSION = 1
+# DOC-MISMATCH-09: a real N-05XD set to 100.0 reports "@VOLUME 10.0". Read
+# 10.0 as the maximum when the last known volume was this close to it; the
+# unit only steps by 0.5.
+TRUNCATED_VOLUME = 10.0
+NEAR_MAX_VOLUME = 95.0
 # Retry backoff for the network side, which needs ~30 s after POWER ON.
 NETWORK_RETRY_MIN = 10.0
 NETWORK_RETRY_MAX = 30.0
@@ -64,6 +70,8 @@ class EsotericState:
     messages: dict[str, Message] = field(default_factory=dict)
     received_at: dict[str, datetime] = field(default_factory=dict)
     unsupported: set[str] = field(default_factory=set)
+    # Effective volume in device steps (after the 100.0 fix-up below).
+    volume: float | None = None
 
     def value(self, key: str) -> str | None:
         """Joined arguments of the last ``@<key> ...`` line."""
@@ -74,14 +82,6 @@ class EsotericState:
         """Arguments of the last ``@<key> ...`` line."""
         message = self.messages.get(key)
         return message.args if message else ()
-
-    @property
-    def volume(self) -> float | None:
-        """Volume in device steps."""
-        try:
-            return float(self.args(REQ_VOLUME)[0])
-        except (IndexError, ValueError):
-            return None
 
 
 class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
@@ -112,9 +112,12 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         self.data = EsotericState()
         self._strikes: dict[str, int] = {}
         self._unsubs: list[Callable[[], None]] = []
-        self._store: Store[list[str]] = Store(
+        # {"inputs": [...], "volume": float}; version 1 data was a bare list
+        # of inputs, which is still accepted.
+        self._store: Store[dict[str, Any] | list[str]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.inputs"
         )
+        self._volume_hint: float | None = None
         self.learned_inputs: list[str] = list(model.known_inputs)
         self._polls = 0
         self.network = network
@@ -126,9 +129,13 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
 
     async def async_start(self) -> None:
         """Hook up listeners and start the connection loop."""
-        for name in await self._store.async_load() or []:
+        stored = await self._store.async_load() or {}
+        if isinstance(stored, list):
+            stored = {"inputs": stored}
+        for name in stored.get("inputs", []):
             if name not in self.learned_inputs:
                 self.learned_inputs.append(name)
+        self._volume_hint = stored.get("volume")
         self._unsubs.append(self.client.add_listener(self._on_message))
         self._unsubs.append(self.client.add_connection_listener(self._on_connection))
         await self.client.start()
@@ -197,7 +204,33 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
             else:
                 state.power = True
                 self._learn_input(message.value)
+        elif message.key == REQ_VOLUME:
+            self._on_volume(message)
         self.async_update_listeners()
+
+    def _on_volume(self, message: Message) -> None:
+        try:
+            steps = float(message.args[0])
+        except (IndexError, ValueError):
+            return
+        volume = self.model.volume
+        if (
+            volume is not None
+            and volume.maximum >= 100
+            and steps == TRUNCATED_VOLUME
+            and self._volume_hint is not None
+            and self._volume_hint >= NEAR_MAX_VOLUME
+        ):
+            steps = volume.maximum
+        self.data.volume = steps
+        if steps != self._volume_hint:
+            self._volume_hint = steps
+            self._save()
+
+    def _save(self) -> None:
+        self._store.async_delay_save(
+            lambda: {"inputs": self.learned_inputs, "volume": self._volume_hint}, 5
+        )
 
     @callback
     def _on_connection(self, connected: bool) -> None:
@@ -213,7 +246,7 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         if self.model.direct_inputs or name in self.learned_inputs:
             return
         self.learned_inputs.append(name)
-        self._store.async_delay_save(lambda: self.learned_inputs, 5)
+        self._save()
 
     async def _async_update_data(self) -> EsotericState:
         try:
@@ -360,6 +393,8 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
             raise HomeAssistantError(f"{self.model.name} has no volume control")
         steps = round(round(steps / volume.step) * volume.step, 1)
         steps = min(max(steps, 0.0), volume.maximum)
+        # What we asked for decides how a truncated "10.0" reply is read.
+        self._volume_hint = steps
         await self.async_send(f"VOLUME {steps:.1f}")
         await self.async_refresh_key(REQ_VOLUME)
 

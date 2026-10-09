@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,7 +34,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.esoteric.const import (
     CONF_BAUDRATE,
@@ -541,3 +546,83 @@ async def test_diagnostics(hass: HomeAssistant, device: FakeEsoteric) -> None:
     assert diag["power"] is True
     assert diag["last_messages"]["INPUT"] == "@INPUT NET"
     assert diag["network"] is None
+
+
+async def test_volume_100_reported_as_10(hass: HomeAssistant, device: FakeEsoteric):
+    """DOC-MISMATCH-09: at 100.0 the unit answers "@VOLUME 10.0"."""
+    entry = await _setup(hass, device)
+    number = "number.esoteric_n_05xd_volume"
+
+    async def set_volume(value: float) -> None:
+        await hass.services.async_call(
+            "number",
+            "set_value",
+            {ATTR_ENTITY_ID: number, "value": value},
+            blocking=True,
+        )
+
+    await set_volume(100)
+    assert device.values["VOLUME"] == "100.0"
+    assert hass.states.get(number).state == "100.0"
+    assert hass.states.get(MP).attributes[ATTR_MEDIA_VOLUME_LEVEL] == 1.0
+    await entry.runtime_data.async_refresh()  # polling keeps it at 100
+    assert hass.states.get(number).state == "100.0"
+
+    # Knob from 100 down one step, then back up: still read correctly.
+    device.values["VOLUME"] = "99.5"
+    await entry.runtime_data.async_refresh()
+    assert hass.states.get(number).state == "99.5"
+    device.values["VOLUME"] = "100.0"
+    await entry.runtime_data.async_refresh()
+    assert hass.states.get(number).state == "100.0"
+
+    # Volume down from 100 uses the real value.
+    await _mp(hass, "volume_down")
+    assert device.values["VOLUME"] == "99.5"
+
+    # A genuine 10.0, set from HA or stepped to, stays 10.0.
+    await set_volume(10)
+    assert hass.states.get(number).state == "10.0"
+    await entry.runtime_data.async_refresh()
+    assert hass.states.get(number).state == "10.0"
+    device.values["VOLUME"] = "10.5"
+    await entry.runtime_data.async_refresh()
+    device.values["VOLUME"] = "10.0"
+    await entry.runtime_data.async_refresh()
+    assert hass.states.get(number).state == "10.0"
+
+
+async def test_volume_100_survives_restart(hass: HomeAssistant, device: FakeEsoteric):
+    entry = await _setup(hass, device)
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {ATTR_ENTITY_ID: "number.esoteric_n_05xd_volume", "value": 100},
+        blocking=True,
+    )
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=10))
+    await hass.async_block_till_done()  # stored
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get("number.esoteric_n_05xd_volume").state == "100.0"
+
+
+async def test_old_input_storage_format(
+    hass: HomeAssistant, device: FakeEsoteric, hass_storage
+) -> None:
+    """Version 1 stored a bare list of learned inputs."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Esoteric F-01",
+        unique_id=device.url,
+        data={CONF_CONNECTION: device.url, CONF_MODEL: "f_01", CONF_BAUDRATE: 9600},
+    )
+    hass_storage[f"{DOMAIN}.{entry.entry_id}.inputs"] = {
+        "version": 1,
+        "key": f"{DOMAIN}.{entry.entry_id}.inputs",
+        "data": ["PHONO", "LINE 1"],
+    }
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.learned_inputs[:2] == ["PHONO", "LINE 1"]

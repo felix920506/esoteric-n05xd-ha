@@ -283,6 +283,10 @@ C1X_INPUTS = ("XLR1", "XLR2", "XLR3", "ESLA1", "ESLA2", "ESLA3", "RCA1", "RCA2")
 #                    ignored; the unit stays in standby. Once it acts on POWER
 #                    ON it replies 0x83 (see -06). Handled: re-sent until
 #                    INPUT is no longer OFF.
+#   DOC-MISMATCH-09  @VOLUME 100.0 is accepted (display shows 100), but
+#                    @?VOLUME then answers "@VOLUME 10.0" (99.5 and below are
+#                    reported correctly). Handled: read as 100 when the last
+#                    known volume was >= 95 (persisted across restarts).
 #
 # Not in the table, observed on the N-05XD:
 #   * Standby: every request is still answered, "@INPUT OFF", "@AOUT OFF" and
