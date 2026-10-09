@@ -134,16 +134,26 @@ like any routed traffic. Two things don't cross subnets by themselves:
 
 - **Discovery** uses SSDP multicast. Either enter the address by hand or run an
   SSDP relay or IGMP proxy on your router.
-- **Push updates (UPnP events)** are sent by the unit *to* Home Assistant. Allow
-  the unit's VLAN to reach Home Assistant on the event port. Under **Configure**,
-  set a fixed **Event listener port** so a firewall rule can name it. If Home
-  Assistant runs behind NAT (for example Docker with port mapping), also set the
-  **Event callback URL** to the address the unit can reach, such as
-  `http://192.168.1.10:8099/notify`.
+- **Push updates (UPnP events)** are sent by the unit *to* Home Assistant, and
+  **the N-05XD only accepts event callbacks on its own subnet**. A subscription
+  from another subnet is refused with HTTP 412, whatever the firewall allows.
+  Across VLANs you therefore get polling by default. For push updates the unit
+  needs a callback address on its own subnet:
+  - give the Home Assistant host an interface (or VLAN interface) on the unit's
+    subnet, or
+  - run a reverse proxy on that subnet that forwards to Home Assistant's event
+    port. Under **Configure**, set a fixed **Event listener port** and set the
+    **Event callback URL** to the proxy, for example
+    `http://192.168.1.10:8099/notify`.
 
-If events can't get through, the integration notices that the unit's initial
-event never arrived, logs a warning, and falls back to polling the network side
-at the polling interval. Everything still works, just less promptly.
+  The callback URL option is also what you need when Home Assistant runs behind
+  NAT, such as Docker with port mapping.
+
+If events can't be set up, the integration logs a warning and falls back to
+polling the network side at the polling interval. That covers a refused
+subscription and an initial event that never arrives, for example when blocked
+by a firewall. Everything still works; changes made elsewhere just show up up to
+one polling interval later.
 
 ## Supported models and entities
 
@@ -254,7 +264,7 @@ the same unit:
 
 | Mains power cycle | The unit comes back in standby. RS-232 answers immediately, and settings such as volume are kept. After POWER ON, the network side returns after about 30 s on the same port (23000) with the same device ID, so a manually entered address keeps working. |
 
-Not tested yet: control from a different subnet.
+| Different subnet | Tested from another VLAN, through the router. Control, metadata and repeat/shuffle work. SSDP discovery doesn't cross, so enter the address by hand. Event subscriptions are refused with HTTP 412 unless the callback address is on the unit's own subnet (an address there was accepted). The integration polls instead. |
 
 ### Differences from the command table
 
