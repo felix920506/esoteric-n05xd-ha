@@ -149,6 +149,10 @@ like any routed traffic. Two things don't cross subnets by themselves:
   The callback URL option is also what you need when Home Assistant runs behind
   NAT, such as Docker with port mapping.
 
+Subscriptions are renewed every 15 minutes. If the unit loses them without
+going through standby (for example after a network module glitch), updates
+stop until the next renewal fails and the integration reconnects.
+
 If events can't be set up, the integration logs a warning and falls back to
 polling the network side at the polling interval. That covers a refused
 subscription and an initial event that never arrives, for example when blocked
@@ -316,6 +320,7 @@ Please include:
    logger:
      logs:
        custom_components.esoteric: debug
+       async_upnp_client: debug  # network side only, verbose
    ```
 
 ## Development
