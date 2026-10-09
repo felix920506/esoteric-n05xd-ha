@@ -142,6 +142,18 @@ async def test_falls_back_to_polling(
     assert net.state.transport_state == "Paused"
 
 
+async def test_subscription_refused_412(
+    fake: FakeOpenHome, net: EsotericNetwork, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Seen on the real unit with Home Assistant on another subnet."""
+    fake.reject_subscriptions = True
+    await net.async_connect()
+    assert net.connected and not net.events
+    assert net.callback_url is None  # listener cleaned up
+    assert "only accepts callback addresses on its own subnet" in caplog.text
+    assert net.state.track.title == "Vivid Theory"  # polled
+
+
 async def test_set_repeat_shuffle_seek(fake: FakeOpenHome, net: EsotericNetwork):
     await net.async_connect()
     await net.async_set_repeat(True)

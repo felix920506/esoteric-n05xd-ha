@@ -23,6 +23,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
+from http import HTTPStatus
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
@@ -30,7 +31,7 @@ import aiohttp
 from async_upnp_client.aiohttp import AiohttpNotifyServer, AiohttpSessionRequester
 from async_upnp_client.client import UpnpDevice, UpnpService, UpnpStateVariable
 from async_upnp_client.client_factory import UpnpFactory
-from async_upnp_client.exceptions import UpnpError
+from async_upnp_client.exceptions import UpnpError, UpnpResponseError
 from defusedxml import ElementTree
 
 _LOGGER = logging.getLogger(__name__)
@@ -248,13 +249,33 @@ class EsotericNetwork:
 
         try:
             await self._async_subscribe()
+        except UpnpResponseError as err:
+            if err.status == HTTPStatus.PRECONDITION_FAILED:
+                # Seen on a real N-05XD: it only accepts callbacks on its own
+                # subnet and answers 412 otherwise.
+                _LOGGER.warning(
+                    "%s refused event subscriptions for %s (HTTP 412); it only "
+                    "accepts callback addresses on its own subnet. Polling "
+                    "instead. For push updates, give Home Assistant an address "
+                    "on the unit's subnet, or set the event callback URL to a "
+                    "proxy there",
+                    self.url,
+                    self.callback_url,
+                )
+            else:
+                _LOGGER.warning(
+                    "Could not subscribe to events from %s (%s); polling instead",
+                    self.url,
+                    err,
+                )
+            await self._async_stop_events()
         except (UpnpError, aiohttp.ClientError, OSError) as err:
             _LOGGER.warning(
                 "Could not subscribe to events from %s (%s); polling instead",
                 self.url,
                 err,
             )
-            self.events = False
+            await self._async_stop_events()
         if not self.events:
             await self._async_poll()
         self.connected = True

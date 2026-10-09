@@ -43,6 +43,8 @@ class FakeOpenHome:
     def __init__(self) -> None:
         """Initialize."""
         self.send_events = True
+        # Like the real unit with a callback outside its subnet.
+        self.reject_subscriptions = False
         self.transport_state = "Playing"
         # Transport.Repeat is a string on the real unit ("true"/"false").
         self.repeat = "false"
@@ -110,6 +112,8 @@ class FakeOpenHome:
         return web.Response(status=405)
 
     def _subscribe(self, service: str, request: web.Request) -> web.Response:
+        if self.reject_subscriptions:
+            return web.Response(status=412)
         sid = request.headers.get("SID")
         if sid is None:  # new subscription (renewals carry SID)
             sid = f"uuid:sub-{next(self._sids)}"
