@@ -242,7 +242,7 @@ the same unit:
 | What | Result |
 |------|--------|
 | Standby | The network module is completely off: no ping, no SSDP, port 23000 closed. |
-| After POWER ON | The network side is reachable after about 30 s, on the same port (23000). |
+| After POWER ON | The network side is reachable after about 30 s, on port 23000. |
 | Events | Subscriptions accepted (12 h timeout). The initial state arrives immediately, and changes arrive within about 0.1 s. |
 | Polling fallback | Works when events can't reach Home Assistant. |
 | Repeat / shuffle | Set through `Transport.SetRepeat("true"/"false")` and `SetShuffle`. RS-232 `?REPEAT` / `?PMODE` follow the change. |
@@ -250,8 +250,11 @@ the same unit:
 | Track artist | minidlna puts the track artist in `dc:creator` and the album artist in a plain `upnp:artist`, and both are handled. |
 | Stopped | Info still reports the previous track. It is not shown in Home Assistant. |
 
-Not tested yet: what the network side reports during AirPlay, the port after
-unplugging the unit from mains, and control from a different subnet.
+| AirPlay | Plays on network source #2 (a hidden "NetAux" source), with no title or artist. Pause and resume are reported correctly, unlike RS-232 `?PSTS` (`DOC-MISMATCH-07`), so with a network address Home Assistant shows AirPlay pause correctly. CanRepeat, CanShuffle and CanSeek are all false, so Home Assistant doesn't offer those controls during AirPlay. |
+
+| Mains power cycle | The unit comes back in standby. RS-232 answers immediately, and settings such as volume are kept. After POWER ON, the network side returns after about 30 s on the same port (23000) with the same device ID, so a manually entered address keeps working. |
+
+Not tested yet: control from a different subnet.
 
 ### Differences from the command table
 
