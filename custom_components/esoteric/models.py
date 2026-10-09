@@ -207,6 +207,8 @@ class ModelInfo:
     known_inputs: tuple[str, ...] = ()
     # Whether the REPEAT / SHUFFLE keys can be used to set those modes.
     repeat_shuffle_keys: bool = True
+    # Seconds after power-on during which commands are ACKed but ignored.
+    power_on_warmup: float = 0.0
     # Flip to True once verified against real hardware.
     tested: bool = False
     is_generic: bool = False
@@ -283,6 +285,11 @@ C1X_INPUTS = ("XLR1", "XLR2", "XLR3", "ESLA1", "ESLA2", "ESLA3", "RCA1", "RCA2")
 #                    ignored; the unit stays in standby. Once it acts on POWER
 #                    ON it replies 0x83 (see -06). Handled: re-sent until
 #                    INPUT is no longer OFF.
+#   DOC-MISMATCH-09  For up to ~8.4 s after it powers on, every command (KEY,
+#                    VOLUME, POWER OFF) is ACKed but ignored, while requests
+#                    are answered normally and no status shows the change.
+#                    Measured 2026-10-10 over four power-ons. Handled: those
+#                    commands wait until the warm-up is over.
 #
 # Not in the table, observed on the N-05XD:
 #   * Standby: every request is still answered, "@INPUT OFF", "@AOUT OFF" and
@@ -333,6 +340,7 @@ MODELS: dict[str, ModelInfo] = {
             volume=Volume(maximum=100.0, step=0.5, use_keys=False),
             known_inputs=N05XD_INPUTS,
             repeat_shuffle_keys=False,
+            power_on_warmup=9.0,  # DOC-MISMATCH-09
             tested=True,
         ),
         ModelInfo(

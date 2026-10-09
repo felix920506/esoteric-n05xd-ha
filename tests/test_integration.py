@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -364,6 +366,37 @@ async def test_power_on_right_after_off_is_retried(
     assert device.received.count("@POWER ON") > 1
     assert hass.states.get(MP).state == STATE_PLAYING
     assert hass.states.get(MP).attributes[ATTR_INPUT_SOURCE] == "NET"
+
+
+async def test_commands_wait_for_warmup_after_power_on(
+    hass: HomeAssistant, device: FakeEsoteric
+) -> None:
+    """DOC-MISMATCH-09: commands right after POWER ON are ACKed but ignored."""
+    device.warmup = 0.5
+    entry = await _setup(hass, device)
+    coordinator = entry.runtime_data
+    coordinator.model = replace(coordinator.model, power_on_warmup=0.6)
+    with patch("custom_components.esoteric.coordinator.POWER_SETTLE", 0.01):
+        await _mp(hass, "turn_off")
+        # turn_on then select_source back to back, as in an automation.
+        await _mp(hass, "turn_on")
+        await _mp(hass, "select_source", source="LINE2")
+        assert device.values["INPUT"] == "LINE2"
+        await _mp(hass, "volume_set", volume_level=0.5)
+        assert device.values["VOLUME"] == "50.0"
+
+        # The unit would ignore POWER OFF during the warm-up too.
+        await _mp(hass, "turn_off")
+        await _mp(hass, "turn_on")
+        await _mp(hass, "turn_off")
+        assert device.power is False
+
+    # Powered on elsewhere: the warm-up starts when polling notices.
+    device.power = True
+    device._on_at = time.monotonic()  # noqa: SLF001
+    await coordinator.async_refresh()
+    await _mp(hass, "select_source", source="XLR")
+    assert device.values["INPUT"] == "XLR"
 
 
 async def test_power_on_gives_up(hass: HomeAssistant, device: FakeEsoteric) -> None:

@@ -233,7 +233,8 @@ own OpenHome playlist from a test DLNA server. Replies took 30–150 ms over the
   Commands are still ACKed. The integration treats `INPUT OFF` as standby. For
   other models it still assumes standby when the unit NAKs or ignores requests.
 - **Power-on time.** After `POWER ON`, the display shows "Initialize" for about
-  30 s. Requests are answered straight away.
+  30 s. Requests are answered straight away, but commands are ignored for up to
+  about 8.4 s (`DOC-MISMATCH-09`).
 - **Menu keys.** MENU (`KEY 21`) steps through setup items (`CLK`, `VOLDP`, …)
   instead of opening and closing the menu. **< and > change the shown setting
   immediately.** The menu closes on its own after a few seconds. The menu and
@@ -287,6 +288,7 @@ tagged in the code with its `DOC-MISMATCH-xx` code (`grep -rn DOC-MISMATCH`).
 | `DOC-MISMATCH-06` | `POWER ON` | ACK (`0x06`) | Replies `0x83` instead whenever it actually powers on. | If no ACK arrives, the integration reads INPUT back and treats the command as successful when the unit reports itself on. | Handled |
 | `DOC-MISMATCH-07` | `?PSTS` | Play status | Stays `PLAY 0 0 00 TE` while AirPlay is paused (so does the display), with no track number or time | Shown as reported. | **Confirmed AirPlay-only.** During DLNA playback, pause, track and time are reported correctly. |
 | `DOC-MISMATCH-08` | `POWER ON` | ACK means the command was received | Within about 6–8 s of `POWER OFF`, it's ACKed but ignored, and the unit stays in standby | After POWER ON, the integration reads INPUT back and re-sends POWER ON for up to 15 s while the unit still reports `OFF`. Measured on the unit: 8.8 s from turn-off to on. | Handled |
+| `DOC-MISMATCH-09` | Any command after `POWER ON` | ACK means the command was received | For up to about 8.4 s after it powers on, `KEY`, `VOLUME` and `POWER OFF` are ACKed but ignored. Requests are answered normally, and no status value shows when the unit is ready. Measured over four power-ons. | Commands wait until 9 s after power-on, so an automation can turn the unit on and select a source straight away. Requests are not delayed. | Handled |
 
 The CD-group REPEAT/SHUFFLE codes (`KEY 47`, `KEY 1F`) were also NAKed. That's
 expected, since they aren't documented for the N-05XD.

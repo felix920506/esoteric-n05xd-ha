@@ -123,6 +123,8 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         self._network_task: asyncio.Task[None] | None = None
         self._network_backoff = NETWORK_RETRY_MIN
         self._network_retry_at = 0.0
+        # DOC-MISMATCH-09: commands sent before this are ignored by the unit.
+        self._ready_at = 0.0
 
     async def async_start(self) -> None:
         """Hook up listeners and start the connection loop."""
@@ -195,6 +197,8 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
                     state.power = False
                     self.schedule_network_upkeep(now=True)
             else:
+                if state.power is False:
+                    self._start_warmup()
                 state.power = True
                 self._learn_input(message.value)
         self.async_update_listeners()
@@ -273,8 +277,26 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
 
     # Commands -----------------------------------------------------------
 
+    def _start_warmup(self, since: float | None = None) -> None:
+        """Note that the unit just powered on (at ``since``, default now)."""
+        if since is None:
+            since = time.monotonic()
+        self._ready_at = max(self._ready_at, since + self.model.power_on_warmup)
+
+    async def _async_wait_ready(self) -> None:
+        """Wait out the unit's warm-up after power-on (DOC-MISMATCH-09)."""
+        delay = self._ready_at - time.monotonic()
+        if delay > 0:
+            _LOGGER.debug(
+                "%s is warming up, waiting %.1f s before sending",
+                self.model.name,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
     async def async_send(self, command: str) -> None:
         """Send a normal command, translating errors for the UI."""
+        await self._async_wait_ready()
         try:
             await self.client.send_command(command)
         except EsotericError as err:
@@ -306,9 +328,18 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
     async def async_set_power(self, on: bool) -> None:
         """Power on / standby."""
         command = "POWER ON" if on else "POWER OFF"
+        if not on:
+            await self._async_wait_ready()
+        was_unknown = self.data.power is None
+        sent_at = time.monotonic()
         acked = await self._send_power(command)
         if on:
             await self._confirm_power_on(command, acked)
+            # A unit seen in standby starts its warm-up when the readback
+            # shows it on. Also cover a reply that says it just powered on
+            # (DOC-MISMATCH-06) and a power state we hadn't learned yet.
+            if acked is not True or was_unknown:
+                self._start_warmup(sent_at)
         elif acked is not True:
             raise self._command_error(command, acked)
         self.data.power = on

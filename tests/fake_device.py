@@ -63,6 +63,10 @@ class FakeEsoteric:
         # (DOC-MISMATCH-08).
         self.power_on_lockout = 0.0
         self._off_at = 0.0
+        # A real N-05XD ACKs but ignores every command for ~8 s after it
+        # powers on (DOC-MISMATCH-09).
+        self.warmup = 0.0
+        self._on_at = 0.0
         self.inputs = [
             "NET",
             "Bluetooth",
@@ -214,12 +218,18 @@ class FakeEsoteric:
                 self.send(NAK, writer)
             return
         command, _, arg = body.partition(" ")
+        warming_up = self.power and time.monotonic() - self._on_at < self.warmup
+        if warming_up and (command, arg) != ("POWER", "ON"):
+            self.send(ACK, writer)
+            return
         if command == "POWER" and arg in ("ON", "OFF"):
             if arg == "OFF":
                 self._off_at = time.monotonic()
             elif time.monotonic() - self._off_at < self.power_on_lockout:
                 self.send(ACK, writer)
                 return
+            if arg == "ON" and not self.power:
+                self._on_at = time.monotonic()
             self.power = arg == "ON"
             if self.power:
                 self.send(self.power_on_reply, writer)
