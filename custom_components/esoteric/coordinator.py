@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -136,8 +137,10 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
         """Disconnect."""
         while self._unsubs:
             self._unsubs.pop()()
-        if self._network_task is not None:
-            self._network_task.cancel()
+        if (task := self._network_task) is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         if self.network is not None:
             await self.network.async_disconnect()
         await self.client.stop()
@@ -174,6 +177,10 @@ class EsotericCoordinator(DataUpdateCoordinator[EsotericState]):
             _LOGGER.debug("Network side not available: %s", err)
             self._network_retry_at = time.monotonic() + self._network_backoff
             self._network_backoff = min(self._network_backoff * 2, NETWORK_RETRY_MAX)
+        except Exception:
+            # Never let the background task die with an unretrieved error.
+            _LOGGER.exception("Unexpected error on the network side")
+            self._network_retry_at = time.monotonic() + NETWORK_RETRY_MAX
 
     @callback
     def _on_message(self, message: Message) -> None:

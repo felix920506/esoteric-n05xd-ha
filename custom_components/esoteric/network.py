@@ -230,7 +230,10 @@ class EsotericNetwork:
                 return
             try:
                 await self._async_connect()
-            except (UpnpError, aiohttp.ClientError, OSError, TimeoutError) as err:
+            except NetworkError:
+                await self._async_teardown()
+                raise
+            except Exception as err:  # noqa: BLE001 - always clean up
                 await self._async_teardown()
                 raise NetworkError(f"{self.url}: {err!r}") from err
 

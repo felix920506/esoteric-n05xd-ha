@@ -527,3 +527,17 @@ async def test_all_models_set_up(hass: HomeAssistant, device: FakeEsoteric) -> N
             assert entity.translation_key in strings[entity.domain], entity.entity_id
         await hass.config_entries.async_remove(entry.entry_id)
         await hass.async_block_till_done()
+
+
+async def test_diagnostics(hass: HomeAssistant, device: FakeEsoteric) -> None:
+    """Diagnostics must be JSON serializable (the download button)."""
+    from custom_components.esoteric.diagnostics import (  # noqa: PLC0415
+        async_get_config_entry_diagnostics,
+    )
+
+    entry = await _setup(hass, device)
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    json.dumps(diag)
+    assert diag["power"] is True
+    assert diag["last_messages"]["INPUT"] == "@INPUT NET"
+    assert diag["network"] is None

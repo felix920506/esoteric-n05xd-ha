@@ -19,7 +19,7 @@ from homeassistant.components.media_player import (
 from homeassistant.components.media_player import (
     DOMAIN as MP_DOMAIN,
 )
-from homeassistant.config_entries import SOURCE_SSDP, SOURCE_USER
+from homeassistant.config_entries import SOURCE_SSDP, SOURCE_USER, ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -321,3 +321,42 @@ async def test_options_show_event_settings(hass, device, openhome) -> None:
     entry = await _setup(hass, device, openhome)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert CONF_EVENT_PORT in {str(k) for k in result["data_schema"].schema}
+
+
+async def test_diagnostics_with_network(hass, device, openhome) -> None:
+    import json  # noqa: PLC0415
+
+    from custom_components.esoteric.diagnostics import (  # noqa: PLC0415
+        async_get_config_entry_diagnostics,
+    )
+
+    entry = await _setup(hass, device, openhome)
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    json.dumps(diag)
+    assert diag["network"]["connected"] and diag["network"]["events"]
+    assert diag["network"]["state"]["track"]["title"] == "Vivid Theory"
+    assert "track_uri" not in diag["network"]["state"]
+
+
+async def test_listen_host_never_fails_setup(hass, device, openhome) -> None:
+    """Source IP detection trouble must not break setup (network is optional)."""
+    from homeassistant.exceptions import HomeAssistantError  # noqa: PLC0415
+
+    with patch(
+        "custom_components.esoteric.async_get_source_ip",
+        side_effect=HomeAssistantError("no IPv4"),
+    ):
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_CONNECTION: device.url,
+                CONF_MODEL: "n_05xd",
+                CONF_BAUDRATE: 9600,
+                CONF_NETWORK_URL: "http://unit.invalid:23000/",
+            },
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    assert not entry.runtime_data.network.connected

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import socket
+from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 import voluptuous as vol
@@ -145,9 +148,29 @@ async def _async_create_network(
     return EsotericNetwork(
         async_get_clientsession(hass),
         url,
-        # Listen on the address that routes to the unit (matters with
-        # several interfaces/VLANs).
-        listen_host=await async_get_source_ip(hass, target_ip=urlsplit(url).hostname),
+        listen_host=await _async_listen_host(hass, urlsplit(url).hostname or ""),
         listen_port=int(entry.options.get(CONF_EVENT_PORT, DEFAULT_EVENT_PORT)),
         callback_url=entry.options.get(CONF_CALLBACK_URL) or None,
     )
+
+
+async def _async_listen_host(hass: HomeAssistant, host: str) -> str | None:
+    """Local address that routes to the unit, for the event listener.
+
+    Matters with several interfaces/VLANs. None (all interfaces) if unknown;
+    never fails setup, since the network side is optional.
+    """
+    try:
+        ip_address(host)
+    except ValueError:
+        try:  # resolve without blocking the event loop
+            infos = await asyncio.get_running_loop().getaddrinfo(
+                host, None, family=socket.AF_INET
+            )
+        except OSError:
+            return None
+        host = infos[0][4][0]
+    try:
+        return await async_get_source_ip(hass, target_ip=host)
+    except HomeAssistantError:
+        return None
