@@ -52,6 +52,8 @@ class FakeOpenHome:
         self.duration = 245
         self.seconds = 30
         self.source_index = 0
+        # AirPlay (source 2 on the real unit) reports all three as False.
+        self.can_modes = True
         # Strings Transport.SetRepeat honors; others are ACKed but ignored.
         self.transport_repeat_values = {"true": "true", "false": "false"}
         self.calls: list[str] = []
@@ -155,9 +157,9 @@ class FakeOpenHome:
                 "TransportState": self.transport_state,
                 "Repeat": self.repeat,
                 "Shuffle": int(self.shuffle),
-                "CanRepeat": 1,
-                "CanShuffle": 1,
-                "CanSeek": 1,
+                "CanRepeat": int(self.can_modes),
+                "CanShuffle": int(self.can_modes),
+                "CanSeek": int(self.can_modes),
                 "CanPause": 1,
                 "StreamId": self.stream_id,
             }
@@ -193,7 +195,11 @@ class FakeOpenHome:
                     "CanSkipPrevious": 1,
                 }
             case ("Transport", "StreamInfo"):
-                return {"StreamId": self.stream_id, "CanSeek": 1, "CanPause": 1}
+                return {
+                    "StreamId": self.stream_id,
+                    "CanSeek": int(self.can_modes),
+                    "CanPause": 1,
+                }
             case ("Transport", "Repeat"):
                 return {"Repeat": self.repeat}
             case ("Transport", "Shuffle"):

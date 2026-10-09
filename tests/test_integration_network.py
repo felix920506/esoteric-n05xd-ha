@@ -160,6 +160,21 @@ async def test_state_follows_network_player(hass, device, openhome) -> None:
     await _until(lambda: hass.states.get(MP).state == "buffering")
 
 
+async def test_airplay_hides_repeat_shuffle_seek(hass, device, openhome) -> None:
+    """Seen on the real unit: AirPlay reports CanRepeat/CanShuffle/CanSeek False."""
+    await _setup(hass, device, openhome)
+    openhome.change(source_index=2, can_modes=False, title="", transport_state="Paused")
+    await _until(lambda: hass.states.get(MP).state == "paused")
+    features = hass.states.get(MP).attributes["supported_features"]
+    for feature in (
+        MediaPlayerEntityFeature.REPEAT_SET,
+        MediaPlayerEntityFeature.SHUFFLE_SET,
+        MediaPlayerEntityFeature.SEEK,
+    ):
+        assert not features & feature
+    assert features & MediaPlayerEntityFeature.PAUSE
+
+
 async def test_network_only_on_net_input(hass, device, openhome) -> None:
     entry = await _setup(hass, device, openhome)
     device.values["INPUT"] = "USB"
